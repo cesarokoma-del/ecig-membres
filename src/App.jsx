@@ -587,7 +587,7 @@ export default function App() {
       <div className="login-bg">
         <div className="login-logo">✝</div>
         <div className="login-title">ECIG — LA GRACE</div>
-        <div className="login-sub">Église du Christ Internationale de Gombe</div>
+        <div className="login-sub">Église du Christ en Intercession LA GRACE</div>
         <div className="login-card">
           <h3>👋 Connexion membre</h3>
           {loadingMembres ? (
