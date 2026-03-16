@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.vercel.ecig_membres.twa",
+        "sha256_cert_fingerprints": ["55:43:05:54:17:A2:F9:4B:DA:9F:A2:8C:06:DF:58:4E:43:C2:85:CB:49:76:6A:AB:29:D5:75:02:6D:BD:DB:4C"]
+      }
+    }]
