@@ -585,7 +585,9 @@ export default function App() {
     <div className="app">
       <style>{styles}</style>
       <div className="login-bg">
-        <div className="login-logo">✝</div>
+        <div className="login-logo" style={{padding:'8px'}}>
+  <img src="/LogoECIG.png" style={{width:'60px',height:'60px',objectFit:'contain'}} />
+</div>
         <div className="login-title">ECIG — LA GRACE</div>
         <div className="login-sub">Église du Christ en Intercession LA GRACE</div>
         <div className="login-card">
