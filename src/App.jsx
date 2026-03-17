@@ -528,6 +528,7 @@ export default function App() {
   const [pin, setPin] = useState(["","","",""]);
   const [error, setError] = useState("");
   const [membres, setMembres] = useState([]);
+  const [familles, setFamilles] = useState([]);
   const [loadingMembres, setLoadingMembres] = useState(true);
   const [cotisations, setCotisations] = useState([]);
   const [annonces, setAnnonces] = useState([]);
@@ -539,6 +540,8 @@ export default function App() {
     const fetchMembres = async () => {
       const data = await loadData("ecig_membres", []);
       setMembres(data);
+      const fams = await loadData("ecig_familles", []);
+setFamilles(fams);
       setLoadingMembres(false);
     };
     fetchMembres();
