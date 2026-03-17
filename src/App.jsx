@@ -593,6 +593,7 @@ export default function App() {
   const [cotisations, setCotisations] = useState([]);
   const [annonces, setAnnonces] = useState([]);
   const [calendrier, setCalendrier] = useState([]);
+  const [enseignements, setEnseignements] = useState([]);
 
   useEffect(() => {
     const fetchMembres = async () => {
@@ -617,16 +618,18 @@ export default function App() {
     if (!found) { setError("Veuillez sélectionner un membre."); return; }
     if (pinStr !== (found.pin||"1234")) { setError("PIN incorrect. Essayez encore."); setPin(["","","",""]); return; }
     setLoading(true);
-    const [cotis, anno, cal, fams] = await Promise.all([
+    const [cotis, anno, cal, fams, ens] = await Promise.all([
       loadData("ecig_cotisations", []),
       loadData("ecig_annonces", []),
       loadData("ecig_activites", []),
       loadData("ecig_familles", []),
+      loadData("ecig_enseignements", []),
     ]);
     setCotisations(cotis);
     setAnnonces(anno);
     setCalendrier(cal);
     setFamilles(fams);
+    setEnseignements(ens);
     setMembre(found);
     setLoading(false);
     setScreen("home");
