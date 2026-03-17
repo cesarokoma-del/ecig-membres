@@ -112,6 +112,8 @@ const styles = `
   .badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
   .badge-green { background:var(--green-light); color:var(--green); }
   .badge-gold { background:var(--gold-light); color:var(--gold); }
+  .badge-blue { background:#dbeafe; color:#1d4ed8; }
+  .badge-red { background:#fee2e2; color:#b91c1c; }
 
   /* PROFILE */
   .profile-avatar { width:72px; height:72px; border-radius:50%; background:var(--green); color:var(--white); font-family:'Playfair Display',serif; font-size:26px; display:flex; align-items:center; justify-content:center; margin:0 auto 12px; }
@@ -155,6 +157,14 @@ const styles = `
   /* PIN SECTION */
   .pin-section { background:var(--gold-light); border-radius:14px; padding:16px; margin-top:16px; }
   .pin-section-title { font-weight:700; font-size:14px; color:var(--gold); margin-bottom:10px; }
+
+  /* ENSEIGNEMENT STATUT COULEURS */
+  .ens-icon-en-cours  { background:#dbeafe; }
+  .ens-icon-termine   { background:#dcfce7; }
+  .ens-icon-abandonne { background:#fee2e2; }
+  .ens-badge-en-cours  { background:#dbeafe; color:#1d4ed8; }
+  .ens-badge-termine   { background:#dcfce7; color:#166534; }
+  .ens-badge-abandonne { background:#fee2e2; color:#b91c1c; }
 `;
 
 // ============================================================
@@ -300,7 +310,6 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
     <div className="content">
       <div className="page-title">👨‍👩‍👧‍👦 Ma Famille</div>
 
-      {/* En-tête famille */}
       <div className="famille-header">
         <div className="famille-name">🏠 {maFamille.nom}</div>
         <div className="famille-adresse">📍 {maFamille.adresse||"Adresse non renseignée"}</div>
@@ -310,7 +319,6 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
       {savedAdresse && <div className="success-msg">✅ Adresse mise à jour !</div>}
       {savedMembre && <div className="success-msg">✅ Membre sauvegardé !</div>}
 
-      {/* Modifier adresse — chef seulement */}
       {isChef && (
         <div className="card" style={{background:'var(--green-light)',border:'1px solid rgba(27,107,58,0.2)'}}>
           <div className="card-header">
@@ -331,7 +339,6 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
         </div>
       )}
 
-      {/* Liste des membres */}
       <div className="section-title">👥 Membres ({membresFamille.length})</div>
       <div className="card">
         {membresFamille.length === 0 ? (
@@ -354,14 +361,12 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
         })}
       </div>
 
-      {/* Ajouter membre — chef seulement */}
       {isChef && (
         <button className="btn-save" onClick={()=>{setFormMembre({prenom:"",nom:"",genre:"Masculin",telephone:"",dateNaissance:"",statut:"actif",departement:"",fonction:"",baptise:false});setEditMembreId(null);setShowAddMembre(true);}}>
           ➕ Ajouter un membre de famille
         </button>
       )}
 
-      {/* Modal ajout/modification membre */}
       {showAddMembre && (
         <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowAddMembre(false)}>
           <div className="modal-box">
@@ -454,42 +459,137 @@ function CalendrierScreen({ calendrier }) {
 // ============================================================
 // ÉCRAN: ENSEIGNEMENTS
 // ============================================================
-function EnseignementsScreen({ enseignements }) {
+
+// Retourne les classes CSS et le label selon le statut
+function getStatutStyle(statut) {
+  const s = (statut||"").toLowerCase();
+  if (s === "en cours")   return { iconClass: "ens-icon-en-cours",  badgeClass: "ens-badge-en-cours",  label: "En cours" };
+  if (s === "terminé" || s === "termine")
+                          return { iconClass: "ens-icon-termine",   badgeClass: "ens-badge-termine",   label: "Terminé" };
+  if (s === "abandonné" || s === "abandonne")
+                          return { iconClass: "ens-icon-abandonne", badgeClass: "ens-badge-abandonne", label: "Abandonné" };
+  // Valeur par défaut : bleu (en cours)
+  return { iconClass: "ens-icon-en-cours", badgeClass: "ens-badge-en-cours", label: statut||"En cours" };
+}
+
+function EnseignementsScreen({ membre, enseignements }) {
   const [selected, setSelected] = useState(null);
-  if (selected) return (
-    <div className="content">
-      <button onClick={()=>setSelected(null)} style={{background:'none',border:'none',color:'var(--green)',fontFamily:'Nunito,sans-serif',fontWeight:'700',fontSize:'14px',cursor:'pointer',marginBottom:'16px',display:'flex',alignItems:'center',gap:'6px'}}>
-        ← Retour
-      </button>
-      <div className="page-title">{selected.titre||selected.sujet}</div>
-      <div style={{fontSize:'12px',color:'var(--text-muted)',marginBottom:'16px'}}>{selected.date} {selected.orateur||selected.pasteur ? `• ${selected.orateur||selected.pasteur}` : ""}</div>
-      <div className="card">
-        <div style={{fontSize:'14px',lineHeight:'1.7',color:'var(--text)',whiteSpace:'pre-wrap'}}>{selected.contenu||selected.notes||selected.description||"(Pas de notes disponibles)"}</div>
-      </div>
-      {selected.reference && <div className="card" style={{background:'var(--green-light)'}}>
-        <div className="section-title" style={{color:'var(--green)'}}>📖 Référence biblique</div>
-        <div style={{fontSize:'14px',color:'var(--green-dark)',fontWeight:'600'}}>{selected.reference}</div>
-      </div>}
-    </div>
+
+  // Filtrer uniquement les enseignements du membre connecté
+  const mesEnseignements = enseignements.filter(e =>
+    String(e.membreId) === String(membre.id)
   );
+
+  if (selected) {
+    const { iconClass, badgeClass, label } = getStatutStyle(selected.statut);
+    return (
+      <div className="content">
+        <button
+          onClick={()=>setSelected(null)}
+          style={{background:'none',border:'none',color:'var(--green)',fontFamily:'Nunito,sans-serif',fontWeight:'700',fontSize:'14px',cursor:'pointer',marginBottom:'16px',display:'flex',alignItems:'center',gap:'6px'}}
+        >
+          ← Retour
+        </button>
+
+        {/* En-tête module */}
+        <div style={{display:'flex',alignItems:'center',gap:'14px',marginBottom:'20px'}}>
+          <div className={`list-bullet ${iconClass}`} style={{width:'52px',height:'52px',borderRadius:'14px',fontSize:'22px',flexShrink:0}}>📖</div>
+          <div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:'18px',color:'var(--green-dark)',fontWeight:'700',lineHeight:'1.3'}}>
+              {selected.niveau||selected.module||"Enseignement"}
+            </div>
+            <span className={`badge ${badgeClass}`} style={{marginTop:'4px',display:'inline-block'}}>
+              {label}
+            </span>
+          </div>
+        </div>
+
+        {/* Dates */}
+        {(selected.dateDebut||selected.dateFin) && (
+          <div className="card" style={{padding:'12px 16px'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+              {selected.dateDebut && (
+                <div>
+                  <div className="form-label">Début</div>
+                  <div style={{fontSize:'14px',fontWeight:'600'}}>{selected.dateDebut}</div>
+                </div>
+              )}
+              {selected.dateFin && (
+                <div>
+                  <div className="form-label">Fin prévue</div>
+                  <div style={{fontSize:'14px',fontWeight:'600'}}>{selected.dateFin}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Notes */}
+        {selected.notes && (
+          <div className="card">
+            <div className="section-title" style={{marginBottom:'8px'}}>📝 Notes</div>
+            <div style={{fontSize:'14px',lineHeight:'1.7',color:'var(--text)',whiteSpace:'pre-wrap'}}>{selected.notes}</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="content">
       <div className="page-title">📖 Enseignements</div>
-      <div className="page-sub">Messages et études bibliques</div>
+      <div className="page-sub">Suivi de ma formation biblique</div>
+
+      {/* Légende des couleurs */}
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'16px'}}>
+        <span className="badge ens-badge-en-cours">● En cours</span>
+        <span className="badge ens-badge-termine">● Terminé</span>
+        <span className="badge ens-badge-abandonne">● Abandonné</span>
+      </div>
+
       <div className="card">
-        {enseignements.length===0 ? <div className="empty"><div className="empty-icon">📖</div><p>Aucun enseignement disponible</p></div>
-        : [...enseignements].reverse().map((e,i)=>(
-          <div className="list-item" key={i} onClick={()=>setSelected(e)} style={{cursor:'pointer'}}>
-            <div className="list-bullet green">📖</div>
-            <div className="list-body">
-              <div className="list-title">{e.titre||e.sujet}</div>
-              <div className="list-desc">{e.orateur||e.pasteur||""}</div>
-              {e.date && <div className="list-date">{e.date}</div>}
-              {e.reference && <span className="badge badge-green" style={{marginTop:'4px'}}>{e.reference}</span>}
-            </div>
-            <div style={{color:'var(--text-muted)',fontSize:'18px',alignSelf:'center'}}>›</div>
+        {mesEnseignements.length === 0 ? (
+          <div className="empty">
+            <div className="empty-icon">📖</div>
+            <p>Aucun enseignement enregistré pour vous.</p>
           </div>
-        ))}
+        ) : (
+          mesEnseignements.map((e, i) => {
+            const { iconClass, badgeClass, label } = getStatutStyle(e.statut);
+            return (
+              <div
+                className="list-item"
+                key={i}
+                onClick={()=>setSelected(e)}
+                style={{cursor:'pointer'}}
+              >
+                {/* Icône Bible avec couleur selon statut */}
+                <div className={`list-bullet ${iconClass}`} style={{width:'44px',height:'44px',borderRadius:'12px',fontSize:'20px',flexShrink:0}}>
+                  📖
+                </div>
+
+                <div className="list-body">
+                  {/* Niveau / Module bien visible */}
+                  <div className="list-title" style={{fontSize:'15px'}}>
+                    {e.niveau||e.module||"Module non défini"}
+                  </div>
+                  {/* Badge statut */}
+                  <span className={`badge ${badgeClass}`} style={{marginTop:'4px',display:'inline-block'}}>
+                    {label}
+                  </span>
+                  {/* Dates si disponibles */}
+                  {e.dateDebut && (
+                    <div className="list-date" style={{marginTop:'4px'}}>
+                      Début : {e.dateDebut}{e.dateFin ? ` • Fin : ${e.dateFin}` : ""}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{color:'var(--text-muted)',fontSize:'18px',alignSelf:'center'}}>›</div>
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -677,19 +777,18 @@ export default function App() {
 
   if (loading) return <div className="app"><style>{styles}</style><Spinner/></div>;
 
-  // Mettre à jour le membre depuis la liste pour avoir les données fraîches
   const membreFrais = membres.find(m => m.id === membre.id) || membre;
 
   return (
     <div className="app">
       <style>{styles}</style>
       <TopBar membre={membreFrais} onLogout={handleLogout} />
-      {screen==="home" && <HomeScreen membre={membreFrais} cotisations={cotisations}/>}
-      {screen==="famille" && <FamilleScreen membre={membreFrais} membres={membres} familles={familles} setFamilles={setFamilles} setMembres={setMembres}/>}
-      {screen==="calendrier" && <CalendrierScreen calendrier={calendrier}/>}
-      {screen==="annonces" && <AnnoncesScreen annonces={annonces}/>}
-      {screen==="enseignements" && <EnseignementsScreen enseignements={enseignements}/>}
-      {screen==="profil" && <ProfilScreen membre={membreFrais} membres={membres} setMembres={setMembres}/>}
+      {screen==="home"          && <HomeScreen membre={membreFrais} cotisations={cotisations}/>}
+      {screen==="famille"       && <FamilleScreen membre={membreFrais} membres={membres} familles={familles} setFamilles={setFamilles} setMembres={setMembres}/>}
+      {screen==="calendrier"    && <CalendrierScreen calendrier={calendrier}/>}
+      {screen==="annonces"      && <AnnoncesScreen annonces={annonces}/>}
+      {screen==="enseignements" && <EnseignementsScreen membre={membreFrais} enseignements={enseignements}/>}
+      {screen==="profil"        && <ProfilScreen membre={membreFrais} membres={membres} setMembres={setMembres}/>}
       <BottomNav screen={screen} setScreen={setScreen}/>
     </div>
   );
