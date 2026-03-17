@@ -699,6 +699,36 @@ export default function App() {
     const fetchMembres = async () => {
       const data = await loadData("ecig_membres", []);
       setMembres(data);
+
+      // Restaurer la session sauvegardée (si l'utilisateur avait déjà ouvert l'app)
+      try {
+        const saved = localStorage.getItem("ecig_session");
+        if (saved) {
+          const { membreId } = JSON.parse(saved);
+          const found = data.find(m => String(m.id) === String(membreId));
+          if (found) {
+            setLoading(true);
+            setLoadingMembres(false);
+            const [cotis, anno, cal, fams, ens] = await Promise.all([
+              loadData("ecig_cotisations", []),
+              loadData("ecig_annonces", []),
+              loadData("ecig_activites", []),
+              loadData("ecig_familles", []),
+              loadData("ecig_enseignements", []),
+            ]);
+            setCotisations(cotis);
+            setAnnonces(anno);
+            setCalendrier(cal);
+            setFamilles(fams);
+            setEnseignements(ens);
+            setMembre(found);
+            setLoading(false);
+            setScreen("home");
+            return;
+          }
+        }
+      } catch(e) {}
+
       setLoadingMembres(false);
     };
     fetchMembres();
@@ -731,11 +761,15 @@ export default function App() {
     setFamilles(fams);
     setEnseignements(ens);
     setMembre(found);
+    // Sauvegarder la session pour éviter de saisir le PIN à chaque rafraîchissement
+    try { localStorage.setItem("ecig_session", JSON.stringify({ membreId: found.id })); } catch(e) {}
     setLoading(false);
     setScreen("home");
   };
 
   const handleLogout = () => {
+    // Effacer la session sauvegardée pour forcer le login au prochain accès
+    try { localStorage.removeItem("ecig_session"); } catch(e) {}
     setMembre(null); setScreen("login"); setPin(["","","",""]); setError("");
   };
 
