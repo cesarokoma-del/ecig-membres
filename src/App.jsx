@@ -71,7 +71,7 @@ const styles = `
   .bottom-nav { position:fixed; bottom:0; left:50%; transform:translateX(-50%); width:100%; max-width:480px; background:var(--white); border-top:1px solid var(--border); display:flex; z-index:100; padding-bottom:env(safe-area-inset-bottom); box-shadow:0 -2px 16px rgba(0,0,0,0.08); }
   .nav-item { flex:1; display:flex; flex-direction:column; align-items:center; padding:10px 4px 8px; cursor:pointer; border:none; background:none; gap:3px; }
   .nav-icon { font-size:20px; line-height:1; }
-  .nav-label { font-size:10px; font-weight:600; color:var(--text-muted); font-family:'Nunito',sans-serif; }
+  .nav-label { font-size:9px; font-weight:600; color:var(--text-muted); font-family:'Nunito',sans-serif; }
   .nav-item.active .nav-label { color:var(--green); }
 
   /* CONTENT */
@@ -185,15 +185,16 @@ function BottomNav({ screen, setScreen }) {
   const tabs = [
     { id:"home", icon:"🏠", label:"Accueil" },
     { id:"famille", icon:"👨‍👩‍👧‍👦", label:"Famille" },
-    { id:"calendrier", icon:"📅", label:"Calendrier" },
+    { id:"calendrier", icon:"📅", label:"Agenda" },
     { id:"annonces", icon:"📢", label:"Annonces" },
+    { id:"enseignements", icon:"📖", label:"Enseign." },
     { id:"profil", icon:"👤", label:"Profil" },
   ];
   return (
     <nav className="bottom-nav">
       {tabs.map(t => (
         <button key={t.id} className={`nav-item ${screen===t.id?"active":""}`} onClick={()=>setScreen(t.id)}>
-          <span className="nav-icon">{t.icon}</span>
+          <span className="nav-icon" style={{fontSize:'18px'}}>{t.icon}</span>
           <span className="nav-label">{t.label}</span>
         </button>
       ))}
@@ -365,6 +366,9 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
         <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowAddMembre(false)}>
           <div className="modal-box">
             <div className="modal-title">{editMembreId ? "✏️ Modifier le membre" : "➕ Nouveau membre"}</div>
+            <div style={{background:'var(--gold-light)',border:'1px solid rgba(201,151,42,0.2)',borderRadius:'12px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:'var(--gold)'}}>
+              ℹ️ Département, rôle et baptême sont gérés par l'administration.
+            </div>
             <div className="form-group">
               <div className="form-label">Prénom *</div>
               <input className="form-input" value={formMembre.prenom} onChange={e=>sf("prenom",e.target.value)} placeholder="Prénom..." />
@@ -390,19 +394,8 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
               <input className="form-input" type="date" value={formMembre.dateNaissance} onChange={e=>sf("dateNaissance",e.target.value)} />
             </div>
             <div className="form-group">
-              <div className="form-label">Rôle / Fonction</div>
-              <input className="form-input" value={formMembre.fonction} onChange={e=>sf("fonction",e.target.value)} placeholder="Ex: Épouse, Fils, Fille..." />
-            </div>
-            <div className="form-group">
-              <div className="form-label">Département</div>
-              <select className="form-input" value={formMembre.departement} onChange={e=>sf("departement",e.target.value)}>
-                <option value="">— Choisir —</option>
-                {["Hommes","Femmes","Jeunes","Enfants","Couples","Chorale","Intercession","Diaconie"].map(d=><option key={d}>{d}</option>)}
-              </select>
-            </div>
-            <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px'}}>
-              <input type="checkbox" id="baptise" checked={formMembre.baptise} onChange={e=>sf("baptise",e.target.checked)} style={{width:'18px',height:'18px'}} />
-              <label htmlFor="baptise" style={{fontSize:'14px',fontWeight:'600'}}>Baptisé(e) par immersion</label>
+              <div className="form-label">Adresse</div>
+              <input className="form-input" value={formMembre.adresse||""} onChange={e=>sf("adresse",e.target.value)} placeholder="Ex: Ngaliema, Kinshasa..." />
             </div>
             <div style={{display:'flex',gap:'10px'}}>
               <button className="btn-small" style={{flex:1,padding:'14px',background:'var(--border)',color:'var(--text)',borderRadius:'14px'}} onClick={()=>setShowAddMembre(false)}>Annuler</button>
@@ -454,6 +447,50 @@ function CalendrierScreen({ calendrier }) {
           ))}
         </div>
       </>}
+    </div>
+  );
+}
+
+// ============================================================
+// ÉCRAN: ENSEIGNEMENTS
+// ============================================================
+function EnseignementsScreen({ enseignements }) {
+  const [selected, setSelected] = useState(null);
+  if (selected) return (
+    <div className="content">
+      <button onClick={()=>setSelected(null)} style={{background:'none',border:'none',color:'var(--green)',fontFamily:'Nunito,sans-serif',fontWeight:'700',fontSize:'14px',cursor:'pointer',marginBottom:'16px',display:'flex',alignItems:'center',gap:'6px'}}>
+        ← Retour
+      </button>
+      <div className="page-title">{selected.titre||selected.sujet}</div>
+      <div style={{fontSize:'12px',color:'var(--text-muted)',marginBottom:'16px'}}>{selected.date} {selected.orateur||selected.pasteur ? `• ${selected.orateur||selected.pasteur}` : ""}</div>
+      <div className="card">
+        <div style={{fontSize:'14px',lineHeight:'1.7',color:'var(--text)',whiteSpace:'pre-wrap'}}>{selected.contenu||selected.notes||selected.description||"(Pas de notes disponibles)"}</div>
+      </div>
+      {selected.reference && <div className="card" style={{background:'var(--green-light)'}}>
+        <div className="section-title" style={{color:'var(--green)'}}>📖 Référence biblique</div>
+        <div style={{fontSize:'14px',color:'var(--green-dark)',fontWeight:'600'}}>{selected.reference}</div>
+      </div>}
+    </div>
+  );
+  return (
+    <div className="content">
+      <div className="page-title">📖 Enseignements</div>
+      <div className="page-sub">Messages et études bibliques</div>
+      <div className="card">
+        {enseignements.length===0 ? <div className="empty"><div className="empty-icon">📖</div><p>Aucun enseignement disponible</p></div>
+        : [...enseignements].reverse().map((e,i)=>(
+          <div className="list-item" key={i} onClick={()=>setSelected(e)} style={{cursor:'pointer'}}>
+            <div className="list-bullet green">📖</div>
+            <div className="list-body">
+              <div className="list-title">{e.titre||e.sujet}</div>
+              <div className="list-desc">{e.orateur||e.pasteur||""}</div>
+              {e.date && <div className="list-date">{e.date}</div>}
+              {e.reference && <span className="badge badge-green" style={{marginTop:'4px'}}>{e.reference}</span>}
+            </div>
+            <div style={{color:'var(--text-muted)',fontSize:'18px',alignSelf:'center'}}>›</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -648,6 +685,7 @@ export default function App() {
       {screen==="famille" && <FamilleScreen membre={membreFrais} membres={membres} familles={familles} setFamilles={setFamilles} setMembres={setMembres}/>}
       {screen==="calendrier" && <CalendrierScreen calendrier={calendrier}/>}
       {screen==="annonces" && <AnnoncesScreen annonces={annonces}/>}
+      {screen==="enseignements" && <EnseignementsScreen enseignements={enseignements}/>}
       {screen==="profil" && <ProfilScreen membre={membreFrais} membres={membres} setMembres={setMembres}/>}
       <BottomNav screen={screen} setScreen={setScreen}/>
     </div>
