@@ -254,7 +254,7 @@ function HomeScreen({ membre, cotisations }) {
             <div><div className="form-label">Rôle</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.role||membre.fonction||"—"}</div></div>
             <div><div className="form-label">Département</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.departement||"—"}</div></div>
             <div><div className="form-label">Statut</div><span className="badge badge-green">{membre.statut||"Actif"}</span></div>
-            <div><div className="form-label">Famille</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.famille||membre.familleNom||(familles.find(f=>f.id==membre.familleId)?.nom)||"—"}</div></div>
+            <div><div className="form-label">Famille</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.famille||membre.familleNom||"—"}</div></div>
           </div>
         </div>
       </div>
@@ -528,7 +528,6 @@ export default function App() {
   const [pin, setPin] = useState(["","","",""]);
   const [error, setError] = useState("");
   const [membres, setMembres] = useState([]);
-  const [familles, setFamilles] = useState([]);
   const [loadingMembres, setLoadingMembres] = useState(true);
   const [cotisations, setCotisations] = useState([]);
   const [annonces, setAnnonces] = useState([]);
@@ -540,8 +539,6 @@ export default function App() {
     const fetchMembres = async () => {
       const data = await loadData("ecig_membres", []);
       setMembres(data);
-      const fams = await loadData("ecig_familles", []);
-      setFamilles(fams);
       setLoadingMembres(false);
     };
     fetchMembres();
