@@ -254,7 +254,7 @@ function HomeScreen({ membre, cotisations }) {
             <div><div className="form-label">Rôle</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.role||membre.fonction||"—"}</div></div>
             <div><div className="form-label">Département</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.departement||"—"}</div></div>
             <div><div className="form-label">Statut</div><span className="badge badge-green">{membre.statut||"Actif"}</span></div>
-            <div><div className="form-label">Famille</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.famille||"—"}</div></div>
+            <div><div className="form-label">Famille</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.famille||membre.familleNom||"—"}</div></div>
           </div>
         </div>
       </div>
