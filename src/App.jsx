@@ -194,7 +194,7 @@ function TopBar({ membre, onLogout }) {
   return (
     <div className="topbar">
       <div className="topbar-logo">
-        <div className="topbar-icon" style={{padding:'2px'}}>   <img src="/LogoECIG.png" style={{width:'28px',height:'28px',objectFit:'contain',borderRadius:'50%'}} /> </div>
+        <div className="topbar-icon" style={{padding:'2px'}}>   <img src="/LogoECIG.jpg" style={{width:'28px',height:'28px',objectFit:'contain',borderRadius:'50%'}} /> </div>
         <div>
           <div className="topbar-name">ECIG — LA GRACE</div>
           <div className="topbar-role">Espace Membre</div>
