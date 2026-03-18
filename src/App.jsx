@@ -6,12 +6,12 @@ import { getFirestore, collection, getDocs, setDoc, doc } from "firebase/firesto
 import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, getRedirectResult, signOut } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: "AIzaSyCMXHMLnO5H0GcW3zXtSSZWjBmcVuCCUas",
+  authDomain: "ecig-gestion.firebaseapp.com",
+  projectId: "ecig-gestion",
+  storageBucket: "ecig-gestion.firebasestorage.app",
+  messagingSenderId: "1014513113938",
+  appId: "1:1014513113938:web:85ab9f0b95e167a6a9388b",
 };
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
