@@ -195,7 +195,7 @@ function TopBar({ membre, onLogout }) {
           <img src="/LogoECIGy.jpg" style={{width:'28px',height:'28px',objectFit:'contain',borderRadius:'50%'}} />
         </div>
         <div>
-          <div className="topbar-name">MEMBRES — ECIG</div>
+          <div className="topbar-name">MEMBRES D' ECIG</div>
           <div className="topbar-role">Espace Membre</div>
         </div>
       </div>
@@ -891,7 +891,7 @@ export default function App() {
         <div className="login-logo" style={{padding:'8px'}}>
           <img src="/LogoECIG.png" style={{width:'60px',height:'60px',objectFit:'contain'}} />
         </div>
-        <div className="login-title">MEMBRES — ECIG</div>
+        <div className="login-title">MEMBRES D' ECIG</div>
         <div className="login-sub">Église du Christ en Intercession LA GRACE</div>
         <div className="login-card">
           {/* Indicateur d'étapes */}
