@@ -775,25 +775,27 @@ export default function App() {
     if (value && index < 3) document.getElementById(`${setter === setPin ? "pin" : setter === setNewPin ? "np" : "np2"}-${index+1}`)?.focus();
   };
 
-  // Étape 1 — Google Sign-In (redirect sur mobile, popup sur desktop)
+  // Étape 1 — Google Sign-In
   const handleGoogleSignIn = async () => {
     setLoading(true); setError("");
     try {
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (isMobile) {
-        await signInWithRedirect(auth, googleProvider);
-        // La page va se recharger — getRedirectResult dans useEffect
-      } else {
-        const result = await signInWithPopup(auth, googleProvider);
-        const user = result.user;
-        setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
-        setLoginStep("select");
-        setLoading(false);
-      }
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
+      setLoginStep("select");
     } catch(e) {
-      setError("Connexion Google annulée ou échouée. Réessayez.");
-      setLoading(false);
+      console.error("Google Sign-In error:", e.code, e.message);
+      if (e.code === "auth/popup-blocked") {
+        setError("Popup bloquée. Autorisez les popups pour ce site dans votre navigateur.");
+      } else if (e.code === "auth/unauthorized-domain") {
+        setError("Domaine non autorisé. Contactez l'administrateur.");
+      } else if (e.code === "auth/popup-closed-by-user") {
+        setError("Connexion annulée. Réessayez.");
+      } else {
+        setError(`Erreur: ${e.code || "inconnue"}. Réessayez.`);
+      }
     }
+    setLoading(false);
   };
 
   // Étape 2 — Sélection du membre → Étape 3 PIN
