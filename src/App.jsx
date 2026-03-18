@@ -192,7 +192,7 @@ function TopBar({ membre, onLogout }) {
     <div className="topbar">
       <div className="topbar-logo">
         <div className="topbar-icon" style={{padding:'2px'}}>
-          <img src="/LogoECIG.png" style={{width:'28px',height:'28px',objectFit:'contain',borderRadius:'50%'}} />
+          <img src="/LogoECIGy.jpg" style={{width:'28px',height:'28px',objectFit:'contain',borderRadius:'50%'}} />
         </div>
         <div>
           <div className="topbar-name">ECIG — LA GRACE</div>
@@ -889,7 +889,7 @@ export default function App() {
       <style>{styles}</style>
       <div className="login-bg">
         <div className="login-logo" style={{padding:'8px'}}>
-          <img src="/LogoECIGy.jpg" style={{width:'60px',height:'60px',objectFit:'contain'}} />
+          <img src="/LogoECIG.png" style={{width:'60px',height:'60px',objectFit:'contain'}} />
         </div>
         <div className="login-title">ECIG — LA GRACE</div>
         <div className="login-sub">Église du Christ en Intercession LA GRACE</div>
