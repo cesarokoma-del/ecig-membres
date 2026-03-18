@@ -765,11 +765,22 @@ export default function App() {
     if (value && index < 3) document.getElementById(`${setter === setPin ? "pin" : setter === setNewPin ? "np" : "np2"}-${index+1}`)?.focus();
   };
 
-  // Étape 1 — Saisie email
+  // Étape 1 — Saisie email → cherche si email déjà connu dans Firebase
   const handleEmailSubmit = () => {
     if (!userEmail || !userEmail.includes("@")) { setError("Veuillez entrer une adresse email valide."); return; }
     setError("");
-    setLoginStep("select");
+    // Si l'email correspond déjà à un membre connu → aller direct au PIN
+    const found = membres.find(m => m.email && m.email.toLowerCase() === userEmail.toLowerCase());
+    if (found) {
+      setSelectedId(String(found.id));
+      setPin(["","","",""]);
+      setPinAttempts(0);
+      setBlockedUntil(null);
+      setLoginStep("pin");
+    } else {
+      // Première connexion → choisir son nom
+      setLoginStep("select");
+    }
   };
 
   // Étape 2 — Sélection du membre → Étape 3 PIN
@@ -821,6 +832,7 @@ export default function App() {
     if (np === "1234") { setError("Le PIN 1234 n'est pas autorisé."); return; }
     if (np !== np2) { setError("Les deux PIN ne correspondent pas."); return; }
     const found = membres.find(m => m.id == selectedId);
+    // Sauvegarder email + nouveau PIN dans Firebase → valide sur tous les appareils
     const updated = membres.map(m => m.id == selectedId ? {...m, pin: np, email: userEmail} : m);
     setMembres(updated);
     await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
@@ -829,8 +841,8 @@ export default function App() {
 
   const completeLogin = async (found) => {
     setLoading(true);
-    // Sauvegarder l'email sur le membre si pas encore fait
-    if (userEmail && found.email !== userEmail) {
+    // Toujours sauvegarder l'email dans Firebase pour retrouver le membre sur tout appareil
+    if (userEmail) {
       const updated = membres.map(m => m.id === found.id ? {...m, email: userEmail} : m);
       setMembres(updated);
       await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
