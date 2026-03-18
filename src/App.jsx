@@ -10,8 +10,7 @@ const firebaseConfig = {
   projectId: "ecig-gestion",
   storageBucket: "ecig-gestion.firebasestorage.app",
   messagingSenderId: "1014513113938",
-  appId: "1:1014513113938:web:6f242739c5fb6ef3a9388b",
-  measurementId: "G-DS7XEV4SND"
+  appId: "1:1014513113938:web:85ab9f0b95e167a6a9388b",
 };
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
@@ -776,27 +775,17 @@ export default function App() {
     if (value && index < 3) document.getElementById(`${setter === setPin ? "pin" : setter === setNewPin ? "np" : "np2"}-${index+1}`)?.focus();
   };
 
-  // Étape 1 — Google Sign-In
+  // Étape 1 — Google Sign-In (redirect)
   const handleGoogleSignIn = async () => {
     setLoading(true); setError("");
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
-      setLoginStep("select");
+      await signInWithRedirect(auth, googleProvider);
+      // La page va se recharger — getRedirectResult gère le retour dans useEffect
     } catch(e) {
       console.error("Google Sign-In error:", e.code, e.message);
-      if (e.code === "auth/popup-blocked") {
-        setError("Popup bloquée. Autorisez les popups pour ce site dans votre navigateur.");
-      } else if (e.code === "auth/unauthorized-domain") {
-        setError("Domaine non autorisé. Contactez l'administrateur.");
-      } else if (e.code === "auth/popup-closed-by-user") {
-        setError("Connexion annulée. Réessayez.");
-      } else {
-        setError(`Erreur: ${e.code || "inconnue"}. Réessayez.`);
-      }
+      setError(`Erreur: ${e.code || "inconnue"}. Réessayez.`);
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   // Étape 2 — Sélection du membre → Étape 3 PIN
