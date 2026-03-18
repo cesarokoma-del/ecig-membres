@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, setDoc, doc } from "firebase/firestore";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, getRedirectResult, signOut } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCMXHMlnOSH0GcW3zXtSSZWjBmcVuCCUas",
@@ -715,7 +715,18 @@ export default function App() {
   const [enseignements, setEnseignements] = useState([]);
 
   useEffect(() => {
-    const fetchMembres = async () => {
+    const init = async () => {
+      // Vérifier le résultat du redirect Google (après retour sur la page)
+      try {
+        const result = await getRedirectResult(auth);
+        if (result?.user) {
+          const user = result.user;
+          setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
+          setLoginStep("select");
+        }
+      } catch(e) { console.log("Redirect result:", e); }
+
+      const fetchMembres = async () => {
       const data = await loadData("ecig_membres", []);
       setMembres(data);
 
@@ -752,6 +763,8 @@ export default function App() {
       setLoadingMembres(false);
     };
     fetchMembres();
+    };
+    init();
   }, []);
 
   const handlePinChange = (index, value, setter) => {
@@ -762,18 +775,25 @@ export default function App() {
     if (value && index < 3) document.getElementById(`${setter === setPin ? "pin" : setter === setNewPin ? "np" : "np2"}-${index+1}`)?.focus();
   };
 
-  // Étape 1 — Google Sign-In
+  // Étape 1 — Google Sign-In (redirect sur mobile, popup sur desktop)
   const handleGoogleSignIn = async () => {
     setLoading(true); setError("");
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
-      setLoginStep("select");
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        await signInWithRedirect(auth, googleProvider);
+        // La page va se recharger — getRedirectResult dans useEffect
+      } else {
+        const result = await signInWithPopup(auth, googleProvider);
+        const user = result.user;
+        setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
+        setLoginStep("select");
+        setLoading(false);
+      }
     } catch(e) {
       setError("Connexion Google annulée ou échouée. Réessayez.");
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   // Étape 2 — Sélection du membre → Étape 3 PIN
