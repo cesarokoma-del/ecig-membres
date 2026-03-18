@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, setDoc, doc } from "firebase/firestore";
-import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, getRedirectResult, signOut } from "firebase/auth";
+import { getAuth, signOut } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCMXHMLnO5H0GcW3zXtSSZWjBmcVuCCUas",
@@ -16,7 +16,6 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 const auth = getAuth(firebaseApp);
-const googleProvider = new GoogleAuthProvider();
 
 const saveData = async (key, data) => {
   try { await setDoc(doc(db, "ecig_data", key), { value: JSON.stringify(data) }); } catch(e) {}
@@ -57,10 +56,10 @@ const styles = `
   .pin-row { display:flex; gap:10px; justify-content:center; margin-bottom:20px; }
   .pin-dot { width:52px; height:52px; border-radius:12px; border:2px solid var(--border); font-size:22px; text-align:center; font-family:'Nunito',sans-serif; font-weight:700; color:var(--green); outline:none; background:var(--bg); }
   .pin-dot:focus { border-color:var(--green); background:var(--green-light); }
-  .btn-google { width:100%; padding:14px; border-radius:14px; border:2px solid var(--border); background:var(--white); color:var(--text); font-family:'Nunito',sans-serif; font-size:15px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:10px; transition:all 0.2s; margin-bottom:12px; }
-  .btn-google:hover { border-color:#4285F4; background:#f0f4ff; }
-  .google-icon { width:20px; height:20px; }
-  .google-email { font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:16px; padding:8px 12px; background:#f0f4ff; border-radius:8px; border:1px solid #c7d7fb; }
+  .btn-email { width:100%; padding:14px; border-radius:14px; border:none; background:var(--green); color:var(--white); font-family:'Nunito',sans-serif; font-size:15px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:10px; transition:all 0.2s; margin-bottom:12px; }
+  .btn-email:hover { background:var(--green-dark); }
+  .btn-email:disabled { opacity:0.5; cursor:not-allowed; }
+  .email-display { font-size:12px; color:var(--text-muted); text-align:center; margin-bottom:16px; padding:8px 12px; background:#f0f4ff; border-radius:8px; border:1px solid #c7d7fb; }
   .pin-change-banner { background:#FFF3CD; border:1px solid #FFD700; border-radius:10px; padding:12px; margin-bottom:14px; font-size:13px; color:#856404; text-align:center; }
   .pin-attempts { font-size:12px; color:#C62828; text-align:center; margin-top:6px; font-weight:600; }
   .blocked-msg { background:#FFEBEE; border:1px solid #C62828; border-radius:10px; padding:14px; text-align:center; color:#C62828; font-size:13px; font-weight:600; margin-bottom:12px; }
@@ -696,8 +695,8 @@ function ProfilScreen({ membre, membres, setMembres }) {
 // ============================================================
 export default function App() {
   const [screen, setScreen] = useState("login");
-  const [loginStep, setLoginStep] = useState("google"); // google | select | pin | change-pin
-  const [googleUser, setGoogleUser] = useState(null);
+  const [loginStep, setLoginStep] = useState("email"); // email | select | pin | change-pin
+  const [userEmail, setUserEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [membre, setMembre] = useState(null);
   const [selectedId, setSelectedId] = useState("");
@@ -717,16 +716,6 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      // Vérifier le résultat du redirect Google (après retour sur la page)
-      try {
-        const result = await getRedirectResult(auth);
-        if (result?.user) {
-          const user = result.user;
-          setGoogleUser({ email: user.email, displayName: user.displayName, photoURL: user.photoURL });
-          setLoginStep("select");
-        }
-      } catch(e) { console.log("Redirect result:", e); }
-
       const fetchMembres = async () => {
       const data = await loadData("ecig_membres", []);
       setMembres(data);
@@ -735,12 +724,12 @@ export default function App() {
       try {
         const saved = localStorage.getItem("ecig_session");
         if (saved) {
-          const { membreId, googleEmail } = JSON.parse(saved);
+          const { membreId, userEmail: savedEmail } = JSON.parse(saved);
           const found = data.find(m => String(m.id) === String(membreId));
           if (found) {
             setLoading(true);
             setLoadingMembres(false);
-            if (googleEmail) setGoogleUser({ email: googleEmail, displayName: "", photoURL: "" });
+            if (savedEmail) setUserEmail(savedEmail);
             const [cotis, anno, cal, fams, ens] = await Promise.all([
               loadData("ecig_cotisations", []),
               loadData("ecig_annonces", []),
@@ -776,17 +765,11 @@ export default function App() {
     if (value && index < 3) document.getElementById(`${setter === setPin ? "pin" : setter === setNewPin ? "np" : "np2"}-${index+1}`)?.focus();
   };
 
-  // Étape 1 — Google Sign-In (redirect)
-  const handleGoogleSignIn = async () => {
-    setLoading(true); setError("");
-    try {
-      await signInWithRedirect(auth, googleProvider);
-      // La page va se recharger — getRedirectResult gère le retour dans useEffect
-    } catch(e) {
-      console.error("Google Sign-In error:", e.code, e.message);
-      setError(`Erreur: ${e.code || "inconnue"}. Réessayez.`);
-      setLoading(false);
-    }
+  // Étape 1 — Saisie email
+  const handleEmailSubmit = () => {
+    if (!userEmail || !userEmail.includes("@")) { setError("Veuillez entrer une adresse email valide."); return; }
+    setError("");
+    setLoginStep("select");
   };
 
   // Étape 2 — Sélection du membre → Étape 3 PIN
@@ -837,22 +820,21 @@ export default function App() {
     if (np.length < 4) { setError("Le nouveau PIN doit contenir 4 chiffres."); return; }
     if (np === "1234") { setError("Le PIN 1234 n'est pas autorisé."); return; }
     if (np !== np2) { setError("Les deux PIN ne correspondent pas."); return; }
-    // Sauvegarder le nouveau PIN
     const found = membres.find(m => m.id == selectedId);
-    const updated = membres.map(m => m.id == selectedId ? {...m, pin: np, googleEmail: googleUser?.email} : m);
+    const updated = membres.map(m => m.id == selectedId ? {...m, pin: np, email: userEmail} : m);
     setMembres(updated);
     await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
-    await completeLogin({...found, pin: np, googleEmail: googleUser?.email});
+    await completeLogin({...found, pin: np, email: userEmail});
   };
 
   const completeLogin = async (found) => {
     setLoading(true);
-    // Sauvegarder l'email Google sur le membre si pas encore fait
-    if (googleUser?.email && found.googleEmail !== googleUser.email) {
-      const updated = membres.map(m => m.id === found.id ? {...m, googleEmail: googleUser.email} : m);
+    // Sauvegarder l'email sur le membre si pas encore fait
+    if (userEmail && found.email !== userEmail) {
+      const updated = membres.map(m => m.id === found.id ? {...m, email: userEmail} : m);
       setMembres(updated);
       await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
-      found = {...found, googleEmail: googleUser.email};
+      found = {...found, email: userEmail};
     }
     const [cotis, anno, cal, fams, ens] = await Promise.all([
       loadData("ecig_cotisations", []),
@@ -863,14 +845,14 @@ export default function App() {
     ]);
     setCotisations(cotis); setAnnonces(anno); setCalendrier(cal); setFamilles(fams); setEnseignements(ens);
     setMembre(found);
-    try { localStorage.setItem("ecig_session", JSON.stringify({ membreId: found.id, googleEmail: googleUser?.email })); } catch(e) {}
+    try { localStorage.setItem("ecig_session", JSON.stringify({ membreId: found.id, userEmail })); } catch(e) {}
     setLoading(false);
     setScreen("home");
   };
 
   const handleLogout = async () => {
     try { await signOut(auth); localStorage.removeItem("ecig_session"); } catch(e) {}
-    setMembre(null); setScreen("login"); setLoginStep("google"); setGoogleUser(null);
+    setMembre(null); setScreen("login"); setLoginStep("email"); setUserEmail("");
     setPin(["","","",""]); setNewPin(["","","",""]); setNewPin2(["","","",""]); setError(""); setPinAttempts(0); setBlockedUntil(null);
   };
 
@@ -887,20 +869,30 @@ export default function App() {
         <div className="login-card">
           {/* Indicateur d'étapes */}
           <div className="step-indicator">
-            {["google","select","pin"].map((s,i) => (
+            {["email","select","pin"].map((s,i) => (
               <div key={s} className={`step-dot ${loginStep === s || (loginStep === "change-pin" && i === 2) ? "active" : ""}`} />
             ))}
           </div>
 
-          {/* ÉTAPE 1 — Google Sign-In */}
-          {loginStep === "google" && <>
-            <h3>🔐 Connexion sécurisée</h3>
+          {/* ÉTAPE 1 — Email */}
+          {loginStep === "email" && <>
+            <h3>✉️ Votre adresse email</h3>
             <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:20}}>
-              Connectez-vous avec le compte Google de votre téléphone pour accéder à votre espace membre.
+              Entrez votre email pour accéder à votre espace membre.
             </p>
-            <button className="btn-google" onClick={handleGoogleSignIn} disabled={loading}>
-              <svg className="google-icon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-              {loading ? "Connexion..." : "Se connecter avec Google"}
+            <div className="form-group">
+              <input
+                className="form-input"
+                type="email"
+                value={userEmail}
+                onChange={e=>{setUserEmail(e.target.value);setError("");}}
+                placeholder="votre@email.com"
+                onKeyDown={e=>e.key==="Enter"&&handleEmailSubmit()}
+                style={{marginBottom:'12px'}}
+              />
+            </div>
+            <button className="btn-login" onClick={handleEmailSubmit} disabled={!userEmail}>
+              Continuer →
             </button>
             {error && <div className="error-msg">{error}</div>}
           </>}
@@ -908,7 +900,7 @@ export default function App() {
           {/* ÉTAPE 2 — Choisir son nom */}
           {loginStep === "select" && <>
             <h3>👤 Qui êtes-vous ?</h3>
-            {googleUser && <div className="google-email">✅ Connecté : {googleUser.email}</div>}
+            {userEmail && <div className="email-display">✉️ {userEmail}</div>}
             {loadingMembres ? <div style={{textAlign:'center',padding:'20px',color:'var(--text-muted)'}}>Chargement...</div> : <>
               <select className="login-select" value={selectedId} onChange={e=>{setSelectedId(e.target.value);setError("");}}>
                 <option value="">— Choisissez votre nom —</option>
@@ -924,7 +916,7 @@ export default function App() {
           {/* ÉTAPE 3 — PIN */}
           {loginStep === "pin" && <>
             <h3>🔑 Entrez votre PIN</h3>
-            {googleUser && <div className="google-email">✅ {googleUser.email}</div>}
+            {userEmail && <div className="email-display">✉️ {userEmail}</div>}
             {blockedUntil && new Date() < blockedUntil
               ? <div className="blocked-msg">⛔ Compte bloqué temporairement.<br/>Trop de tentatives échouées.<br/>Réessayez dans 5 minutes.</div>
               : <>
@@ -946,6 +938,9 @@ export default function App() {
             }
             <button onClick={()=>{setLoginStep("select");setPin(["","","",""]);setError("");setPinAttempts(0);setBlockedUntil(null);}} style={{width:'100%',marginTop:10,padding:'10px',border:'none',background:'transparent',color:'var(--text-muted)',cursor:'pointer',fontSize:13}}>
               ← Changer de nom
+            </button>
+            <button onClick={()=>{setLoginStep("email");setPin(["","","",""]);setError("");setPinAttempts(0);setBlockedUntil(null);setSelectedId("");}} style={{width:'100%',padding:'6px',border:'none',background:'transparent',color:'var(--text-muted)',cursor:'pointer',fontSize:12}}>
+              ← Changer d'email
             </button>
             {error && <div className="error-msg">{error}</div>}
           </>}
