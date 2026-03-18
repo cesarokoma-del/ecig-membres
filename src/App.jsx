@@ -10,7 +10,8 @@ const firebaseConfig = {
   projectId: "ecig-gestion",
   storageBucket: "ecig-gestion.firebasestorage.app",
   messagingSenderId: "1014513113938",
-  appId: "1:1014513113938:web:85ab9f0b95e167a6a9388b",
+  appId: "1:1014513113938:web:6f242739c5fb6ef3a9388b",
+  measurementId: "G-DS7XEV4SND"
 };
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
