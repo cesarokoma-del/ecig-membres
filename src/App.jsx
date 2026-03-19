@@ -725,9 +725,15 @@ export default function App() {
       setMembres(data);
 
       // Restaurer la session sauvegardée
+      // sessionStorage est effacé quand l'app est tuée sur Android → preuve que la session est légitime
       try {
+        const sessionAlive = sessionStorage.getItem("ecig_alive");
         const saved = localStorage.getItem("ecig_session");
-        if (saved) {
+        if (!sessionAlive && saved) {
+          // App relancée après avoir été tuée → effacer la session sauvegardée
+          localStorage.removeItem("ecig_session");
+        }
+        if (sessionAlive && saved) {
           const { membreId, userEmail: savedEmail } = JSON.parse(saved);
           const found = data.find(m => String(m.id) === String(membreId));
           if (found) {
@@ -861,13 +867,16 @@ export default function App() {
     ]);
     setCotisations(cotis); setAnnonces(anno); setCalendrier(cal); setFamilles(fams); setEnseignements(ens);
     setMembre(found);
-    try { localStorage.setItem("ecig_session", JSON.stringify({ membreId: found.id, userEmail })); } catch(e) {}
+    try {
+      localStorage.setItem("ecig_session", JSON.stringify({ membreId: found.id, userEmail }));
+      sessionStorage.setItem("ecig_alive", "1"); // Preuve que l'app est active
+    } catch(e) {}
     setLoading(false);
     setScreen("home");
   };
 
   const handleLogout = async () => {
-    try { await signOut(auth); localStorage.removeItem("ecig_session"); } catch(e) {}
+    try { await signOut(auth); localStorage.removeItem("ecig_session"); sessionStorage.removeItem("ecig_alive"); } catch(e) {}
     setMembre(null); setScreen("login"); setLoginStep("email"); setUserEmail("");
     setPin(["","","",""]); setNewPin(["","","",""]); setNewPin2(["","","",""]); setError(""); setPinAttempts(0); setBlockedUntil(null);
   };
@@ -876,7 +885,10 @@ export default function App() {
   // useRef évite le problème de "stale closure" sur Android PWA
   useEffect(() => {
     const doLock = () => {
-      try { localStorage.removeItem("ecig_session"); } catch(e) {}
+      try {
+        localStorage.removeItem("ecig_session");
+        sessionStorage.removeItem("ecig_alive"); // Invalider la session
+      } catch(e) {}
       setMembre(null);
       setScreen("login");
       setLoginStep("email");
@@ -890,13 +902,16 @@ export default function App() {
     };
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        // App passe en arrière-plan → sauvegarder le timestamp
-        try { localStorage.setItem("ecig_bg_at", Date.now().toString()); } catch(e) {}
+        // App passe en arrière-plan → effacer IMMÉDIATEMENT session + flag
+        if (screenRef.current !== "login") {
+          try {
+            localStorage.removeItem("ecig_session");
+            sessionStorage.removeItem("ecig_alive");
+          } catch(e) {}
+        }
       } else if (document.visibilityState === "visible") {
-        // App revient au premier plan → vérifier si on était connecté
-        const bgAt = localStorage.getItem("ecig_bg_at");
-        if (bgAt && screenRef.current !== "login") {
-          try { localStorage.removeItem("ecig_bg_at"); } catch(e) {}
+        // App revient au premier plan → si on était connecté, verrouiller
+        if (screenRef.current !== "login") {
           doLock();
         }
       }
