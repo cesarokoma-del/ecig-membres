@@ -868,6 +868,59 @@ export default function App() {
     setPin(["","","",""]); setNewPin(["","","",""]); setNewPin2(["","","",""]); setError(""); setPinAttempts(0); setBlockedUntil(null);
   };
 
+  // 🔒 SÉCURITÉ 1 — Verrouillage au retour au premier plan (visibilitychange)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && screen !== "login") {
+        // L'app revient au premier plan → déconnexion immédiate
+        try { localStorage.removeItem("ecig_session"); } catch(e) {}
+        setMembre(null);
+        setScreen("login");
+        setLoginStep("email");
+        setUserEmail("");
+        setPin(["","","",""]);
+        setNewPin(["","","",""]);
+        setNewPin2(["","","",""]);
+        setError("");
+        setPinAttempts(0);
+        setBlockedUntil(null);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [screen]);
+
+  // 🔒 SÉCURITÉ 2 — Déconnexion automatique après 10 minutes d'inactivité
+  useEffect(() => {
+    if (screen === "login") return; // Pas de timer sur l'écran de login
+    const TIMEOUT = 10 * 60 * 1000; // 10 minutes
+    let timer;
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        try { localStorage.removeItem("ecig_session"); } catch(e) {}
+        setMembre(null);
+        setScreen("login");
+        setLoginStep("email");
+        setUserEmail("");
+        setPin(["","","",""]);
+        setNewPin(["","","",""]);
+        setNewPin2(["","","",""]);
+        setError("");
+        setPinAttempts(0);
+        setBlockedUntil(null);
+      }, TIMEOUT);
+    };
+    // Événements d'activité utilisateur
+    const events = ["touchstart", "touchmove", "click", "keydown", "scroll"];
+    events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer(); // Démarrer le timer
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, resetTimer));
+    };
+  }, [screen]);
+
   // Écran de login — 3 étapes
   if (screen === "login") return (
     <div className="app">
