@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, setDoc, doc } from "firebase/firestore";
 import { getAuth, signOut } from "firebase/auth";
@@ -714,6 +714,10 @@ export default function App() {
   const [calendrier, setCalendrier] = useState([]);
   const [enseignements, setEnseignements] = useState([]);
 
+  // Ref pour éviter les "stale closures" dans les event listeners
+  const screenRef = useRef("login");
+  useEffect(() => { screenRef.current = screen; }, [screen]);
+
   useEffect(() => {
     const init = async () => {
       const fetchMembres = async () => {
@@ -869,31 +873,50 @@ export default function App() {
   };
 
   // 🔒 SÉCURITÉ 1 — Verrouillage au retour au premier plan (visibilitychange)
+  // useRef évite le problème de "stale closure" sur Android PWA
   useEffect(() => {
+    const doLock = () => {
+      try { localStorage.removeItem("ecig_session"); } catch(e) {}
+      setMembre(null);
+      setScreen("login");
+      setLoginStep("email");
+      setUserEmail("");
+      setPin(["","","",""]);
+      setNewPin(["","","",""]);
+      setNewPin2(["","","",""]);
+      setError("");
+      setPinAttempts(0);
+      setBlockedUntil(null);
+    };
     const handleVisibility = () => {
-      if (document.visibilityState === "visible" && screen !== "login") {
-        // L'app revient au premier plan → déconnexion immédiate
-        try { localStorage.removeItem("ecig_session"); } catch(e) {}
-        setMembre(null);
-        setScreen("login");
-        setLoginStep("email");
-        setUserEmail("");
-        setPin(["","","",""]);
-        setNewPin(["","","",""]);
-        setNewPin2(["","","",""]);
-        setError("");
-        setPinAttempts(0);
-        setBlockedUntil(null);
+      if (document.visibilityState === "hidden") {
+        // App passe en arrière-plan → sauvegarder le timestamp
+        try { localStorage.setItem("ecig_bg_at", Date.now().toString()); } catch(e) {}
+      } else if (document.visibilityState === "visible") {
+        // App revient au premier plan → vérifier si on était connecté
+        const bgAt = localStorage.getItem("ecig_bg_at");
+        if (bgAt && screenRef.current !== "login") {
+          try { localStorage.removeItem("ecig_bg_at"); } catch(e) {}
+          doLock();
+        }
       }
     };
+    // pageshow couvre le cas "retour depuis le cache" sur certains navigateurs Android
+    const handlePageShow = (e) => {
+      if (screenRef.current !== "login") { doLock(); }
+    };
     document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [screen]);
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, []); // [] = une seule fois, le ref lit toujours la valeur actuelle
 
   // 🔒 SÉCURITÉ 2 — Déconnexion automatique après 10 minutes d'inactivité
   useEffect(() => {
     if (screen === "login") return; // Pas de timer sur l'écran de login
-    const TIMEOUT = 10 * 60 * 1000; // 10 minutes
+    const TIMEOUT = 3 * 60 * 1000; // 3 minutes
     let timer;
     const resetTimer = () => {
       clearTimeout(timer);
