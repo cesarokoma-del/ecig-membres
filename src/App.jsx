@@ -5,7 +5,7 @@ import { getFirestore, collection, getDocs, setDoc, doc } from "firebase/firesto
 import { getAuth, signOut } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCMXHMlnO5H0GcW3zXtSSZWjBmcVuCCUas",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: "ecig-gestion.firebaseapp.com",
   projectId: "ecig-gestion",
   storageBucket: "ecig-gestion.firebasestorage.app",
