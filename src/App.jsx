@@ -853,7 +853,7 @@ export default function App() {
     setLoading(true);
     // Toujours sauvegarder l'email dans Firebase pour retrouver le membre sur tout appareil
     if (userEmail) {
-      const updated = membres.map(m => m.id === found.id ? {...m, email: userEmail} : m);
+      const updated = membres.map(m => m.id === found.id ? {...m, ...found, email: userEmail} : m);
       setMembres(updated);
       await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
       found = {...found, email: userEmail};
