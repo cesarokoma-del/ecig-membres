@@ -1,8 +1,11 @@
 [{
-      "relation": ["delegate_permission/common.handle_all_urls"],
-      "target": {
-        "namespace": "android_app",
-        "package_name": "app.vercel.ecig_membres.twa",
-        "sha256_cert_fingerprints": ["55:43:05:54:17:A2:F9:4B:DA:9F:A2:8C:06:DF:58:4E:43:C2:85:CB:49:76:6A:AB:29:D5:75:02:6D:BD:DB:4C"]
-      }
-    }]
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "app.vercel.ecig_membres.twa",
+    "sha256_cert_fingerprints": [
+      "55:43:05:54:17:A2:F9:4B:DA:9F:A2:8C:06:DF:58:4E:43:C2:85:CB:49:76:6A:AB:29:D5:75:02:6D:BD:DB:4C",
+      "CF:C6:73:3A:6A:E6:B3:91:E6:72:49:49:76:E9:BD:E8:81:3B:95:4C:4D:D0:DF:B3:59:2F:7F:8D:53:13:77:AE"
+    ]
+  }
+}]
