@@ -48,8 +48,17 @@ const sansCodes = (liste) => (liste || []).map(({ pin, ...m }) => m);
 // ── Authentification Firebase des membres ─────────────────────────────────
 // Identifiant technique dérivé de l'email : il ne peut pas entrer en collision
 // avec les comptes d'ECIG-Finances, qui utilisent l'email réel.
-const emailAuthMembre = (email) =>
-  `${(email || "").trim().toLowerCase().replace(/[^a-z0-9]/g, ".")}@membres.ecig.local`;
+const slugEmail = (email) => (email || "").trim().toLowerCase().replace(/[^a-z0-9]/g, ".");
+// Après une réinitialisation d'accès (ECIG-Gestion), le membre reçoit un nouvel
+// identifiant technique : la version est publique, mais ne révèle rien d'autre.
+const versionAcces = async (email) => {
+  try {
+    const s = await getDoc(doc(db, "versions_acces", slugEmail(email)));
+    return s.exists() ? (Number(s.data().v) || 1) : 1;
+  } catch (e) { return 1; }
+};
+const emailAuthMembre = (email, v = 1) =>
+  `${slugEmail(email)}${v > 1 ? ".v" + v : ""}@membres.ecig.local`;
 setPersistence(auth, browserSessionPersistence).catch(() => {});
 const PIN_LONGUEUR = 6;
 const PIN_VIDE = () => Array(PIN_LONGUEUR).fill("");
@@ -873,7 +882,7 @@ export default function App() {
     setLoading(true); setError("");
     try {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
-      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(userEmail), code);
+      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(userEmail, await versionAcces(userEmail)), code);
       const mid = await membreIdDuCompte(cred.user.uid);
       if (!mid) { await signOut(auth); setLoading(false); setError("Compte sans fiche membre. Contactez le secrétariat."); return; }
       await ouvrirEspace(mid);
@@ -931,7 +940,7 @@ export default function App() {
     setLoading(true); setError("");
     try {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
-      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(userEmail), n);
+      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(userEmail, await versionAcces(userEmail)), n);
       await setDoc(doc(db, "profils_membres", cred.user.uid), {
         uid: cred.user.uid, membreId: String(selectedId), email: userEmail.trim().toLowerCase(), activeLe: Date.now(),
       });
