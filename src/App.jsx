@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction, query, where } from "firebase/firestore";
+import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction, query, where, updateDoc, deleteDoc } from "firebase/firestore";
 import {
   getAuth, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
@@ -48,17 +48,31 @@ const sansCodes = (liste) => (liste || []).map(({ pin, ...m }) => m);
 // ── Authentification Firebase des membres ─────────────────────────────────
 // Identifiant technique dérivé de l'email : il ne peut pas entrer en collision
 // avec les comptes d'ECIG-Finances, qui utilisent l'email réel.
-const slugEmail = (email) => (email || "").trim().toLowerCase().replace(/[^a-z0-9]/g, ".");
-// Après une réinitialisation d'accès (ECIG-Gestion), le membre reçoit un nouvel
-// identifiant technique : la version est publique, mais ne révèle rien d'autre.
-const versionAcces = async (email) => {
+// Identifiant de connexion : téléphone ou email, au choix.
+// DOIT rester identique à la fonction du même nom dans ECIG-Gestion.
+const normaliserIdentifiant = (brut) => {
+  const s = (brut || "").trim();
+  if (!s) return null;
+  if (s.includes("@")) {
+    const e = s.toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return null;
+    return { type: "email", affichage: e, slug: e.replace(/[^a-z0-9]/g, ".") };
+  }
+  let d = s.replace(/\D/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (d.length === 10 && d.startsWith("0")) d = "243" + d.slice(1);
+  if (d.length === 9) d = "243" + d;
+  if (d.length < 10 || d.length > 15) return null;
+  return { type: "tel", affichage: "+" + d, slug: "t" + d };
+};
+// Version de l'identifiant technique (augmente à chaque code d'activation émis)
+const versionAcces = async (slug) => {
   try {
-    const s = await getDoc(doc(db, "versions_acces", slugEmail(email)));
-    return s.exists() ? (Number(s.data().v) || 1) : 1;
+    const sn = await getDoc(doc(db, "versions_acces", slug));
+    return sn.exists() ? (Number(sn.data().v) || 1) : 1;
   } catch (e) { return 1; }
 };
-const emailAuthMembre = (email, v = 1) =>
-  `${slugEmail(email)}${v > 1 ? ".v" + v : ""}@membres.ecig.local`;
+const emailAuthMembre = (slug, v = 1) => `${slug}${v > 1 ? ".v" + v : ""}@membres.ecig.local`;
 setPersistence(auth, browserSessionPersistence).catch(() => {});
 const PIN_LONGUEUR = 6;
 const PIN_VIDE = () => Array(PIN_LONGUEUR).fill("");
@@ -352,8 +366,9 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
   );
 
   const handleSaveAdresse = async () => {
-    const updated = await majListe("ecig_familles", l => l.map(f => f.id==maFamille.id ? {...f, adresse} : f));
-    setFamilles(updated);
+    try { await updateDoc(doc(db, "familles", String(maFamille.id)), { adresse }); }
+    catch (e) { alert("Modification refusée : " + (e.code || e.message)); return; }
+    setFamilles(familles.map(f => f.id==maFamille.id ? {...f, adresse} : f));
     setSavedAdresse(true);
     setEditAdresse(false);
     setTimeout(()=>setSavedAdresse(false),3000);
@@ -361,14 +376,21 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
 
   const handleSaveMembre = async () => {
     if (!formMembre.prenom||!formMembre.nom) { alert("Prénom et nom requis"); return; }
-    let updatedMembres;
-    if (editMembreId) {
-      updatedMembres = await majMembre(editMembreId, {...formMembre, familleId:maFamille.id, famille:maFamille.nom});
-    } else {
-      const newM = {...formMembre, id:Date.now(), familleId:maFamille.id, famille:maFamille.nom, dateAdhesion:new Date().toISOString().split("T")[0]};
-      updatedMembres = await majListe("ecig_membres", l => [...l, newM]);
-    }
-    setMembres(sansCodes(updatedMembres));
+    // Le chef de famille ne modifie que l'état civil et les coordonnées
+    const base = { prenom: formMembre.prenom, nom: formMembre.nom, genre: formMembre.genre,
+                   telephone: formMembre.telephone || "", dateNaissance: formMembre.dateNaissance || "", adresse: formMembre.adresse || "" };
+    try {
+      if (editMembreId) {
+        await updateDoc(doc(db, "membres", String(editMembreId)), base);
+        setMembres(membres.map(m => String(m.id) === String(editMembreId) ? { ...m, ...base } : m));
+      } else {
+        const id = String(Date.now());
+        const newM = { ...base, id, familleId: String(maFamille.id), famille: maFamille.nom, statut: "actif",
+                       authActive: false, dateAdhesion: new Date().toISOString().split("T")[0] };
+        await setDoc(doc(db, "membres", id), newM);
+        setMembres([...membres, newM]);
+      }
+    } catch (e) { alert("Enregistrement refusé : " + (e.code || e.message)); return; }
     setShowAddMembre(false);
     setEditMembreId(null);
     setSavedMembre(true);
@@ -713,8 +735,9 @@ function ProfilScreen({ membre, membres, setMembres }) {
 
   const handleSave = async () => {
     const { telephone, adresse } = form;
-    const updated = await majMembre(membre.id, { telephone: telephone || "", adresse: adresse || "" });
-    setMembres(sansCodes(updated));
+    try { await updateDoc(doc(db, "membres", String(membre.id)), { telephone: telephone || "", adresse: adresse || "" }); }
+    catch (e) { alert("Modification refusée : " + (e.code || e.message)); return; }
+    setMembres(membres.map(m => String(m.id) === String(membre.id) ? { ...m, telephone: telephone || "", adresse: adresse || "" } : m));
     setSaved(true);
     setTimeout(()=>setSaved(false),3000);
   };
@@ -746,9 +769,9 @@ function ProfilScreen({ membre, membres, setMembres }) {
       <div className="card">
         <div className="section-title">✏️ Modifier mon profil</div>
         <div className="form-group"><div className="form-label">Téléphone</div><input className="form-input" value={form.telephone||""} onChange={e=>setForm({...form,telephone:e.target.value})} placeholder="+243..." /></div>
-        <div className="form-group"><div className="form-label">Email de connexion</div>
-          <input className="form-input" value={membre.email||""} disabled style={{background:'#F3F4F6',color:'#6B7280'}} />
-          <div style={{fontSize:'11px',color:'var(--text-muted)',marginTop:'4px'}}>Pour changer l'email de connexion, adressez-vous au secrétariat.</div>
+        <div className="form-group"><div className="form-label">Identifiant de connexion</div>
+          <input className="form-input" value={membre.identifiantAffiche||""} disabled style={{background:'#F3F4F6',color:'#6B7280'}} />
+          <div style={{fontSize:'11px',color:'var(--text-muted)',marginTop:'4px'}}>Pour le changer, adressez-vous au secrétariat.</div>
         </div>
         <div className="form-group"><div className="form-label">Adresse</div><input className="form-input" value={form.adresse||""} onChange={e=>setForm({...form,adresse:e.target.value})} placeholder="Adresse..." /></div>
         <button className="btn-save" onClick={handleSave}>💾 Enregistrer</button>
@@ -774,21 +797,21 @@ function ProfilScreen({ membre, membres, setMembres }) {
 // ============================================================
 export default function App() {
   const [screen, setScreen] = useState("login");
-  // email | pin | activer-nom | activer-ancien | activer-nouveau
-  const [loginStep, setLoginStep] = useState("email");
-  const [userEmail, setUserEmail] = useState("");
+  // ident | pin | code | nouveau
+  const [loginStep, setLoginStep] = useState("ident");
+  const [saisieIdent, setSaisieIdent] = useState("");
+  const [ident, setIdent] = useState(null);           // identifiant normalisé
   const [loading, setLoading] = useState(false);
   const [membre, setMembre] = useState(null);
-  const [selectedId, setSelectedId] = useState("");
   const [pin, setPin] = useState(PIN_VIDE());
-  const [ancienPin, setAncienPin] = useState(["","","",""]);
+  const [code, setCode] = useState(PIN_VIDE());
+  const [codeValide, setCodeValide] = useState(null);  // { id, membreId }
   const [newPin, setNewPin] = useState(PIN_VIDE());
   const [newPin2, setNewPin2] = useState(PIN_VIDE());
   const [error, setError] = useState("");
-  const [pinAttempts, setPinAttempts] = useState(0);
+  const [tentatives, setTentatives] = useState(0);
   const [blockedUntil, setBlockedUntil] = useState(null);
   const [membres, setMembres] = useState([]);
-  const [listeActivation, setListeActivation] = useState([]);  // chargée UNIQUEMENT pour l'activation
   const [familles, setFamilles] = useState([]);
   const [cotisations, setCotisations] = useState([]);
   const [annonces, setAnnonces] = useState([]);
@@ -800,54 +823,64 @@ export default function App() {
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
   const resetLogin = () => {
-    setMembre(null); setScreen("login"); setLoginStep("email"); setUserEmail("");
-    setPin(PIN_VIDE()); setAncienPin(["","","",""]); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
-    setError(""); setPinAttempts(0); setBlockedUntil(null); setSelectedId(""); setListeActivation([]);
+    setMembre(null); setScreen("login"); setLoginStep("ident"); setSaisieIdent(""); setIdent(null);
+    setPin(PIN_VIDE()); setCode(PIN_VIDE()); setCodeValide(null); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
+    setError(""); setTentatives(0); setBlockedUntil(null);
+  };
+  const bloque = () => blockedUntil && new Date() < blockedUntil;
+  const echec = (msg) => {
+    const t = tentatives + 1; setTentatives(t);
+    if (t >= 3) { setBlockedUntil(new Date(Date.now() + 5*60*1000)); setError("⛔ 3 tentatives échouées. Réessayez dans 5 minutes."); }
+    else setError(`${msg} ${3 - t} tentative(s) restante(s).`);
   };
 
-  /** Charge les données de l'espace membre une fois authentifié */
+  /** Ouvre l'espace du membre : sa fiche, sa famille, ses contributions */
   const ouvrirEspace = async (membreId) => {
     setLoading(true);
-    // Contributions : collection protégée — le serveur ne renvoie que celles du membre.
-    // Pendant la transition, on complète avec l'ancienne liste (sans doublon).
-    const lireContributions = async () => {
-      let protegees = [];
+    try {
+      const fiche = await getDoc(doc(db, "membres", String(membreId)));
+      if (!fiche.exists()) throw new Error("fiche");
+      const moi = { ...fiche.data(), id: fiche.id };
+      let fam = [], proches = [moi];
+      if (moi.familleId) {
+        const [sf, sp] = await Promise.all([
+          getDoc(doc(db, "familles", String(moi.familleId))).catch(() => null),
+          getDocs(query(collection(db, "membres"), where("familleId", "==", String(moi.familleId)))).catch(() => null),
+        ]);
+        if (sf?.exists()) fam = [{ ...sf.data(), id: sf.id }];
+        if (sp) proches = sp.docs.map(d => ({ ...d.data(), id: d.id }));
+        if (!proches.some(p => p.id === moi.id)) proches.push(moi);
+      }
+      let contribs = [];
       try {
-        const snap = await getDocs(query(collection(db, "contributions"), where("membreId", "==", String(membreId))));
-        protegees = snap.docs.map(d => ({ id: d.id, ...d.data(), montant: Number(d.data().montant) || 0 }));
+        const sc = await getDocs(query(collection(db, "contributions"), where("membreId", "==", String(membreId))));
+        contribs = sc.docs.map(d => ({ id: d.id, ...d.data(), montant: Number(d.data().montant) || 0 }));
       } catch (e) { console.warn("Contributions :", e?.code); }
-      const transferees = new Set(protegees.map(c => c.idOrigine).filter(Boolean));
-      const anciennes = (await loadData("ecig_cotisations", []))
-        .filter(c => String(c.membreId) === String(membreId) && !transferees.has(String(c.id)));
-      return [...protegees, ...anciennes];
-    };
-    const [mbrs, cotis, anno, cal, fams, ens] = await Promise.all([
-      loadData("ecig_membres", []),
-      lireContributions(),
-      loadData("ecig_annonces", []),
-      loadData("ecig_activites", []),
-      loadData("ecig_familles", []),
-      loadData("ecig_enseignements", []),
-    ]);
-    const found = mbrs.find(m => String(m.id) === String(membreId));
-    if (!found) { setLoading(false); await signOut(auth).catch(()=>{}); resetLogin(); setError("Fiche membre introuvable. Contactez le secrétariat."); return false; }
-    setMembres(sansCodes(mbrs));
-    setCotisations(cotis);   // uniquement celles du membre connecté
-    setAnnonces(anno); setCalendrier(cal); setFamilles(fams); setEnseignements(ens);
-    const { pin: _p, ...sansPin } = found;
-    setMembre(sansPin);
-    try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
-    setLoading(false);
-    setScreen("home");
-    return true;
+      const [anno, cal, ens] = await Promise.all([
+        loadData("ecig_annonces", []), loadData("ecig_activites", []), loadData("ecig_enseignements", []),
+      ]);
+      setMembres(proches); setFamilles(fam); setCotisations(contribs);
+      setAnnonces(anno); setCalendrier(cal); setEnseignements(ens);
+      setMembre(moi);
+      try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
+      setLoading(false); setScreen("home");
+      return true;
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+      await signOut(auth).catch(()=>{});
+      resetLogin();
+      setError("Fiche membre introuvable. Contactez le secrétariat.");
+      return false;
+    }
   };
 
   const membreIdDuCompte = async (uid) => {
-    const snap = await getDoc(doc(db, "profils_membres", uid));
-    return snap.exists() ? snap.data().membreId : null;
+    const sn = await getDoc(doc(db, "profils_membres", uid));
+    return sn.exists() ? sn.data().membreId : null;
   };
 
-  // Restauration d'une session Firebase encore valide (même onglet)
+  // Restauration d'une session encore valide (même onglet)
   useEffect(() => {
     let premier = true;
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -866,93 +899,73 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // ── Étape 1 : email ─────────────────────────────────────────────────────
-  const handleEmailSubmit = () => {
-    if (!userEmail || !userEmail.includes("@")) { setError("Veuillez entrer une adresse email valide."); return; }
-    setError(""); setPin(PIN_VIDE()); setLoginStep("pin");
+  // ── Étape 1 : téléphone ou email ──
+  const validerIdent = (suite) => {
+    const n = normaliserIdentifiant(saisieIdent);
+    if (!n) { setError("Saisissez votre numéro de téléphone (ex. 0812345678) ou votre adresse email."); return; }
+    setIdent(n); setError(""); setTentatives(0);
+    setPin(PIN_VIDE()); setCode(PIN_VIDE());
+    setLoginStep(suite);
   };
 
-  // ── Étape 2 : PIN à 6 chiffres, vérifié par le serveur ───────────────────
+  // ── Connexion avec le PIN ──
   const handleLogin = async () => {
-    if (blockedUntil && new Date() < blockedUntil) {
-      setError(`Compte bloqué. Réessayez dans ${Math.ceil((blockedUntil - new Date())/1000)} secondes.`); return;
-    }
-    const code = pin.join("");
-    if (code.length !== PIN_LONGUEUR) return;
+    if (bloque()) { setError("Trop de tentatives. Réessayez dans quelques minutes."); return; }
+    const p = pin.join(""); if (p.length !== PIN_LONGUEUR) return;
     setLoading(true); setError("");
     try {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
-      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(userEmail, await versionAcces(userEmail)), code);
+      const v = await versionAcces(ident.slug);
+      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), p);
       const mid = await membreIdDuCompte(cred.user.uid);
-      if (!mid) { await signOut(auth); setLoading(false); setError("Compte sans fiche membre. Contactez le secrétariat."); return; }
+      if (!mid) { await signOut(auth); setLoading(false); setError("Ce compte n'est plus actif. Demandez un nouveau code au secrétariat."); return; }
       await ouvrirEspace(mid);
     } catch (e) {
+      setLoading(false); setPin(PIN_VIDE());
+      if ((e?.code || "").includes("too-many-requests")) { setError("Trop de tentatives. Patientez quelques minutes."); return; }
+      echec("PIN incorrect, ou compte pas encore activé.");
+    }
+  };
+
+  // ── Activation : vérification du code reçu ──
+  const verifierCode = async () => {
+    if (bloque()) { setError("Trop de tentatives. Réessayez dans quelques minutes."); return; }
+    const c = code.join(""); if (c.length !== 6) return;
+    setLoading(true); setError("");
+    const id = `${ident.slug}_${c}`;
+    try {
+      const sn = await getDoc(doc(db, "codes_activation", id));
       setLoading(false);
-      setPin(PIN_VIDE());
-      const c = e?.code || "";
-      if (c.includes("too-many-requests")) { setError("Trop de tentatives. Patientez quelques minutes."); return; }
-      const attempts = pinAttempts + 1;
-      setPinAttempts(attempts);
-      if (attempts >= 3) {
-        setBlockedUntil(new Date(Date.now() + 5*60*1000));
-        setError("⛔ 3 tentatives échouées. Compte bloqué 5 minutes.");
-      } else {
-        setError(`PIN incorrect, ou compte pas encore activé. ${3 - attempts} tentative(s) restante(s).`);
-      }
-    }
+      if (!sn.exists()) { setCode(PIN_VIDE()); echec("Code incorrect pour cet identifiant."); return; }
+      if (Number(sn.data().expireLe) < Date.now()) { setError("Ce code a expiré. Demandez-en un nouveau au secrétariat."); return; }
+      setCodeValide({ id, membreId: sn.data().membreId });
+      setTentatives(0); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
+      setLoginStep("nouveau");
+    } catch (e) { setLoading(false); setError("Vérification impossible : " + (e?.code || e?.message)); }
   };
 
-  // ── Activation (première connexion avec le nouveau système) ──────────────
-  // La liste des membres n'est chargée qu'ici, le temps de l'activation.
-  const debuterActivation = async () => {
-    if (!userEmail || !userEmail.includes("@")) { setError("Entrez d'abord votre email."); setLoginStep("email"); return; }
-    setError(""); setLoading(true);
-    const data = await loadData("ecig_membres", []);
-    setListeActivation(data);
-    setLoading(false);
-    const parEmail = data.find(m => m.email && m.email.toLowerCase() === userEmail.toLowerCase());
-    if (parEmail) { setSelectedId(String(parEmail.id)); setLoginStep("activer-ancien"); }
-    else { setSelectedId(""); setLoginStep("activer-nom"); }
-    setAncienPin(["","","",""]);
-  };
-
-  const verifierAncienPin = () => {
-    if (blockedUntil && new Date() < blockedUntil) { setError("Compte bloqué temporairement. Réessayez plus tard."); return; }
-    const m = listeActivation.find(x => String(x.id) === String(selectedId));
-    if (!m) { setError("Membre introuvable."); return; }
-    if (m.authActive && !m.pin) { setError("Ce compte est déjà activé. Connectez-vous avec votre PIN à 6 chiffres, ou demandez une réinitialisation au secrétariat."); return; }
-    const attendu = m.pin || "1234";
-    if (ancienPin.join("") !== attendu) {
-      const attempts = pinAttempts + 1; setPinAttempts(attempts); setAncienPin(["","","",""]);
-      if (attempts >= 3) { setBlockedUntil(new Date(Date.now() + 5*60*1000)); setError("⛔ 3 tentatives échouées. Bloqué 5 minutes."); }
-      else setError(`Ancien PIN incorrect. ${3 - attempts} tentative(s) restante(s).`);
-      return;
-    }
-    setError(""); setPinAttempts(0); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
-    setLoginStep("activer-nouveau");
-  };
-
+  // ── Activation : choix du PIN et création du compte ──
   const terminerActivation = async () => {
     const n = newPin.join(""), n2 = newPin2.join("");
-    if (n.length !== PIN_LONGUEUR) { setError(`Le nouveau PIN doit contenir ${PIN_LONGUEUR} chiffres.`); return; }
-    if (/^(\d)\1+$/.test(n) || n === "123456") { setError("PIN trop simple, choisissez-en un autre."); return; }
+    if (n.length !== PIN_LONGUEUR) { setError(`Le PIN doit contenir ${PIN_LONGUEUR} chiffres.`); return; }
+    if (/^(\d)\1+$/.test(n) || n === "123456" || n === "654321") { setError("PIN trop simple, choisissez-en un autre."); return; }
     if (n !== n2) { setError("Les deux PIN ne correspondent pas."); return; }
     setLoading(true); setError("");
     try {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
-      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(userEmail, await versionAcces(userEmail)), n);
+      const v = await versionAcces(ident.slug);
+      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), n);
       await setDoc(doc(db, "profils_membres", cred.user.uid), {
-        uid: cred.user.uid, membreId: String(selectedId), email: userEmail.trim().toLowerCase(), activeLe: Date.now(),
+        uid: cred.user.uid, membreId: String(codeValide.membreId), identifiant: ident.slug, code: codeValide.id, activeLe: Date.now(),
       });
-      // Le code n'est plus stocké dans la liste des membres
-      await majMembre(selectedId, { pin: null, authActive: true, email: userEmail.trim().toLowerCase() });
-      setListeActivation([]);
-      await ouvrirEspace(selectedId);
+      await deleteDoc(doc(db, "codes_activation", codeValide.id)).catch(() => {});
+      await updateDoc(doc(db, "membres", String(codeValide.membreId)), { authActive: true }).catch(() => {});
+      await ouvrirEspace(codeValide.membreId);
     } catch (e) {
       setLoading(false);
       const c = e?.code || "";
       setError(c.includes("email-already-in-use")
-        ? "Un compte est déjà activé avec cet email. Connectez-vous avec votre PIN à 6 chiffres, ou demandez une réinitialisation au secrétariat."
+        ? "Un compte existe déjà pour cet identifiant. Demandez un nouveau code au secrétariat."
         : "Activation impossible : " + (c || e?.message));
     }
   };
@@ -962,7 +975,7 @@ export default function App() {
     resetLogin();
   };
 
-  // 🔒 SÉCURITÉ 1 — Verrouillage au retour au premier plan
+  // 🔒 Verrouillage au retour au premier plan
   useEffect(() => {
     const doLock = () => {
       try { localStorage.removeItem("ecig_session"); sessionStorage.removeItem("ecig_alive"); } catch(e) {}
@@ -985,7 +998,7 @@ export default function App() {
     };
   }, []);
 
-  // 🔒 SÉCURITÉ 2 — Déconnexion automatique après 3 minutes d'inactivité
+  // 🔒 Déconnexion après 3 minutes d'inactivité
   useEffect(() => {
     if (screen === "login") return;
     const TIMEOUT = 3 * 60 * 1000;
@@ -1005,12 +1018,10 @@ export default function App() {
   }, [screen]);
 
   const lien = { width:'100%', marginTop:10, padding:'10px', border:'none', background:'transparent', color:'var(--text-muted)', cursor:'pointer', fontSize:13 };
-  const etapes = ["email","pin","activer-nouveau"];
-  const etapeActive = loginStep === "email" ? 0 : loginStep === "pin" ? 1 : loginStep === "activer-nouveau" ? 2 : 1;
+  const etapeActive = loginStep === "ident" ? 0 : loginStep === "nouveau" ? 2 : 1;
 
   if (demarrage) return <div className="app"><style>{styles}</style><Spinner/></div>;
 
-  // ── Écran de connexion ───────────────────────────────────────────────────
   if (screen === "login") return (
     <div className="app">
       <style>{styles}</style>
@@ -1022,31 +1033,33 @@ export default function App() {
         <div className="login-sub">Église du Christ en Intercession LA GRACE</div>
         <div className="login-card">
           <div className="step-indicator">
-            {etapes.map((s,i) => <div key={s} className={`step-dot ${etapeActive === i ? "active" : ""}`} />)}
+            {[0,1,2].map(i => <div key={i} className={`step-dot ${etapeActive === i ? "active" : ""}`} />)}
           </div>
 
-          {loginStep === "email" && <>
-            <h3>✉️ Votre adresse email</h3>
-            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:20}}>Entrez votre email pour accéder à votre espace membre.</p>
+          {loginStep === "ident" && <>
+            <h3>📱 Votre téléphone ou email</h3>
+            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:16}}>
+              Celui que le secrétariat a enregistré pour vous.
+            </p>
             <div className="form-group">
-              <input className="form-input" type="email" value={userEmail} autoComplete="off"
-                onChange={e=>{setUserEmail(e.target.value);setError("");}} placeholder="votre@email.com"
-                onKeyDown={e=>e.key==="Enter"&&handleEmailSubmit()} style={{marginBottom:'12px'}} />
+              <input className="form-input" type="text" inputMode="email" autoComplete="off" value={saisieIdent}
+                onChange={e=>{setSaisieIdent(e.target.value);setError("");}} placeholder="0812345678 ou votre@email.com"
+                onKeyDown={e=>e.key==="Enter"&&validerIdent("pin")} style={{marginBottom:'12px'}} />
             </div>
-            <button className="btn-login" onClick={handleEmailSubmit} disabled={!userEmail}>🔑 J'ai mon PIN à 6 chiffres</button>
-            <button className="btn-login" onClick={debuterActivation} disabled={!userEmail || loading}
+            <button className="btn-login" onClick={()=>validerIdent("pin")} disabled={!saisieIdent}>🔑 J'ai mon PIN</button>
+            <button className="btn-login" onClick={()=>validerIdent("code")} disabled={!saisieIdent}
               style={{marginTop:10, background:'#fff', color:'var(--green)', border:'2px solid var(--green)'}}>
-              {loading ? "…" : "✨ Première connexion — activer mon compte"}
+              ✨ Première connexion / code reçu
             </button>
-            <div className="pin-hint" style={{marginTop:10}}>Première connexion = vous n'avez encore jamais choisi de PIN à 6 chiffres.</div>
+            <div className="pin-hint" style={{marginTop:10}}>Le code d'activation vous est remis par le secrétariat de l'église.</div>
             {error && <div className="error-msg">{error}</div>}
           </>}
 
           {loginStep === "pin" && <>
-            <h3>🔑 Entrez votre PIN</h3>
-            <div className="email-display">✉️ {userEmail}</div>
-            {blockedUntil && new Date() < blockedUntil
-              ? <div className="blocked-msg">⛔ Compte bloqué temporairement.<br/>Réessayez dans 5 minutes.</div>
+            <h3>🔑 Votre PIN</h3>
+            <div className="email-display">{ident?.affichage}</div>
+            {bloque()
+              ? <div className="blocked-msg">⛔ Trop de tentatives.<br/>Réessayez dans 5 minutes.</div>
               : <>
                 <div className="pin-label">🔐 PIN à {PIN_LONGUEUR} chiffres</div>
                 <PinInput value={pin} onChange={setPin} prefix="pin" onEnter={handleLogin} />
@@ -1054,43 +1067,30 @@ export default function App() {
                   {loading ? "Connexion..." : "Se connecter →"}
                 </button>
               </>}
-            <div className="pin-change-banner" style={{marginTop:14}}>
-              Vous n'avez pas encore de PIN à 6 chiffres ? Ne tapez rien ci-dessus :
-              <button onClick={debuterActivation} disabled={loading} style={{display:'block',margin:'8px auto 0',padding:'8px 14px',border:'none',borderRadius:'8px',background:'var(--green)',color:'#fff',fontWeight:700,cursor:'pointer'}}>
-                Activer mon compte
-              </button>
-            </div>
-            <button onClick={()=>{resetLogin();}} style={lien}>← Changer d'email</button>
+            <div className="pin-hint" style={{marginTop:12}}>PIN oublié ? Demandez un nouveau code au secrétariat.</div>
+            <button onClick={resetLogin} style={lien}>← Changer d'identifiant</button>
             {error && <div className="error-msg">{error}</div>}
           </>}
 
-          {loginStep === "activer-nom" && <>
-            <h3>👤 Qui êtes-vous ?</h3>
-            <div className="email-display">✉️ {userEmail}</div>
-            <select className="login-select" value={selectedId} onChange={e=>{setSelectedId(e.target.value);setError("");}}>
-              <option value="">— Choisissez votre nom —</option>
-              {listeActivation.filter(m => !m.authActive).map(m=><option key={m.id} value={m.id}>{m.prenom} {m.nom}{m.fonction?` (${m.fonction})`:""}</option>)}
-            </select>
-            <button className="btn-login" onClick={()=>{ if(!selectedId){setError("Choisissez votre nom.");return;} setError(""); setLoginStep("activer-ancien"); }} disabled={!selectedId}>Continuer →</button>
-            <button onClick={()=>{resetLogin();}} style={lien}>← Changer d'email</button>
+          {loginStep === "code" && <>
+            <h3>✨ Activation — étape 1 sur 2</h3>
+            <div className="email-display">{ident?.affichage}</div>
+            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:12}}>Tapez le <strong>code à 6 chiffres</strong> reçu du secrétariat.</p>
+            {bloque()
+              ? <div className="blocked-msg">⛔ Trop de tentatives.<br/>Réessayez dans 5 minutes.</div>
+              : <>
+                <PinInput value={code} onChange={setCode} prefix="code" onEnter={verifierCode} />
+                <button className="btn-login" onClick={verifierCode} disabled={loading||code.join("").length<6}>
+                  {loading ? "Vérification..." : "Continuer →"}
+                </button>
+              </>}
+            <button onClick={resetLogin} style={lien}>← Annuler</button>
             {error && <div className="error-msg">{error}</div>}
           </>}
 
-          {loginStep === "activer-ancien" && <>
-            <h3>🔓 Activation — étape 1 sur 2</h3>
-            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:14}}>Tapez d'abord votre <strong>ancien</strong> PIN. Vous choisirez le nouveau, à 6 chiffres, juste après.</p>
-            <div className="email-display">✉️ {userEmail}</div>
-            <div className="pin-label">PIN actuel à 4 chiffres</div>
-            <PinInput value={ancienPin} onChange={setAncienPin} prefix="old" longueur={4} onEnter={verifierAncienPin} />
-            <div className="pin-hint">💡 Si vous ne l'aviez jamais changé : 1234</div>
-            <button className="btn-login" style={{marginTop:12}} onClick={verifierAncienPin} disabled={ancienPin.join("").length<4}>Continuer →</button>
-            <button onClick={()=>{resetLogin();}} style={lien}>← Annuler</button>
-            {error && <div className="error-msg">{error}</div>}
-          </>}
-
-          {loginStep === "activer-nouveau" && <>
+          {loginStep === "nouveau" && <>
             <h3>🔒 Activation — étape 2 sur 2</h3>
-            <div className="pin-change-banner">Choisissez votre nouveau PIN à {PIN_LONGUEUR} chiffres. Il remplace l'ancien, sur tous vos appareils.</div>
+            <div className="pin-change-banner">Choisissez votre PIN à {PIN_LONGUEUR} chiffres. Gardez-le pour vous : il protège vos informations.</div>
             <div className="pin-label">Nouveau PIN</div>
             <PinInput value={newPin} onChange={setNewPin} prefix="np" />
             <div className="pin-label">Confirmer</div>
