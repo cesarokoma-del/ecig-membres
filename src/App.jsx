@@ -98,11 +98,11 @@ function PinInput({ value, onChange, prefix, longueur = PIN_LONGUEUR, onEnter })
   );
 }
 
+// Lecture d'un seul document (calendrier, annonces) : jamais de la collection entière
 const loadData = async (key, def) => {
   try {
-    const snap = await getDocs(collection(db, "ecig_data"));
-    const found = snap.docs.find(d => d.id === key);
-    return found ? JSON.parse(found.data().value) : def;
+    const snap = await getDoc(doc(db, "ecig_data", key));
+    return snap.exists() ? JSON.parse(snap.data().value) : def;
   } catch(e) { return def; }
 };
 
@@ -856,9 +856,11 @@ export default function App() {
         const sc = await getDocs(query(collection(db, "contributions"), where("membreId", "==", String(membreId))));
         contribs = sc.docs.map(d => ({ id: d.id, ...d.data(), montant: Number(d.data().montant) || 0 }));
       } catch (e) { console.warn("Contributions :", e?.code); }
-      const [anno, cal, ens] = await Promise.all([
-        loadData("ecig_annonces", []), loadData("ecig_activites", []), loadData("ecig_enseignements", []),
+      const [anno, cal, sens] = await Promise.all([
+        loadData("ecig_annonces", []), loadData("ecig_activites", []),
+        getDocs(query(collection(db, "enseignements"), where("membreId", "==", String(membreId)))).catch(() => ({ docs: [] })),
       ]);
+      const ens = sens.docs.map(d => ({ ...d.data(), id: d.id }));
       setMembres(proches); setFamilles(fam); setCotisations(contribs);
       setAnnonces(anno); setCalendrier(cal); setEnseignements(ens);
       setMembre(moi);
