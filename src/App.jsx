@@ -78,6 +78,8 @@ const versionAcces = async (slug) => {
 const emailAuthMembre = (slug, v = 0) => `${slug}${v > 0 ? ".v" + v : ""}@membres.ecig.local`;
 setPersistence(auth, browserSessionPersistence).catch(() => {});
 const PIN_LONGUEUR = 6;
+// Succursales : liste à garder identique à celle d'ECIG-Gestion
+const SUCCURSALES = { "01": "Siège — Kinshasa (Ngaliema)", "02": "Demba (Sankuru)" };
 const PIN_VIDE = () => Array(PIN_LONGUEUR).fill("");
 
 /** Champ PIN à cases */
@@ -339,6 +341,9 @@ function HomeScreen({ membre, cotisations }) {
           <div><div className="form-label">Département</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.departement||"—"}</div></div>
           <div><div className="form-label">Statut</div><span className="badge badge-green">{membre.statut||"Actif"}</span></div>
           <div><div className="form-label">Famille</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.famille||"—"}</div></div>
+          <div><div className="form-label">Succursale</div><div style={{fontSize:'14px',fontWeight:'600'}}>{SUCCURSALES[membre.succursale]||"—"}</div></div>
+          <div><div className="form-label">N° de membre</div>
+            <div style={{fontSize:'16px',fontWeight:'800',fontFamily:'monospace',color:'var(--green)',letterSpacing:'1px'}}>{membre.matricule||"En attente d'attribution"}</div></div>
         </div>
       </div>
     </div>
@@ -769,6 +774,12 @@ function ProfilScreen({ membre, membres, setMembres }) {
       <div className="profile-avatar">{initials}</div>
       <div className="profile-name">{membre.prenom} {membre.nom}</div>
       <div className="profile-role">{membre.role||membre.fonction||""} • {membre.departement||""}</div>
+      {membre.matricule && (
+        <div style={{textAlign:'center',marginTop:'-12px',marginBottom:'20px'}}>
+          <span style={{fontFamily:'monospace',fontSize:'15px',fontWeight:800,color:'var(--green)',background:'var(--green-light)',
+            borderRadius:'8px',padding:'4px 12px',letterSpacing:'1px'}}>N° {membre.matricule}</span>
+        </div>
+      )}
       <div className="card">
         <div className="section-title">✏️ Modifier mon profil</div>
         <div className="form-group"><div className="form-label">Téléphone</div><input className="form-input" value={form.telephone||""} onChange={e=>setForm({...form,telephone:e.target.value})} placeholder="+243..." /></div>
