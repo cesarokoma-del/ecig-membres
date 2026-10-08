@@ -1,8 +1,12 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, setDoc, doc } from "firebase/firestore";
-import { getAuth, signOut } from "firebase/auth";
+import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction } from "firebase/firestore";
+import {
+  getAuth, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
+  setPersistence, browserSessionPersistence,
+} from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -20,6 +24,57 @@ const auth = getAuth(firebaseApp);
 const saveData = async (key, data) => {
   try { await setDoc(doc(db, "ecig_data", key), { value: JSON.stringify(data) }); } catch(e) {}
 };
+/**
+ * Mise à jour ATOMIQUE d'une liste stockée en bloc (ecig_membres, ecig_familles).
+ * Relit la version actuelle sur le serveur, applique la modification, réécrit :
+ * une saisie faite entre-temps sur un autre appareil n'est jamais écrasée.
+ */
+const majListe = async (key, fn) => {
+  const ref = doc(db, "ecig_data", key);
+  return runTransaction(db, async (txn) => {
+    const snap = await txn.get(ref);
+    const liste = snap.exists() ? JSON.parse(snap.data().value || "[]") : [];
+    const nouvelle = fn(liste);
+    txn.set(ref, { value: JSON.stringify(nouvelle) });
+    return nouvelle;
+  });
+};
+const majMembre = (id, patch) =>
+  majListe("ecig_membres", l => l.map(m => String(m.id) === String(id) ? { ...m, ...patch } : m));
+
+/** Les codes ne restent jamais en mémoire dans l'application */
+const sansCodes = (liste) => (liste || []).map(({ pin, ...m }) => m);
+
+// ── Authentification Firebase des membres ─────────────────────────────────
+// Identifiant technique dérivé de l'email : il ne peut pas entrer en collision
+// avec les comptes d'ECIG-Finances, qui utilisent l'email réel.
+const emailAuthMembre = (email) =>
+  `${(email || "").trim().toLowerCase().replace(/[^a-z0-9]/g, ".")}@membres.ecig.local`;
+setPersistence(auth, browserSessionPersistence).catch(() => {});
+const PIN_LONGUEUR = 6;
+const PIN_VIDE = () => Array(PIN_LONGUEUR).fill("");
+
+/** Champ PIN à cases */
+function PinInput({ value, onChange, prefix, longueur = PIN_LONGUEUR, onEnter }) {
+  const set = (i, v) => {
+    if (!/^\d?$/.test(v)) return;
+    const arr = [...value]; arr[i] = v; onChange(arr);
+    if (v && i < longueur - 1) document.getElementById(`${prefix}-${i+1}`)?.focus();
+  };
+  return (
+    <div className={`pin-row ${longueur > 4 ? "six" : ""}`}>
+      {Array.from({ length: longueur }, (_, i) => (
+        <input key={i} id={`${prefix}-${i}`} className="pin-dot" type="password" inputMode="numeric" maxLength={1}
+          autoComplete="off" value={value[i] || ""} onChange={e => set(i, e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Backspace" && !value[i] && i > 0) document.getElementById(`${prefix}-${i-1}`)?.focus();
+            if (e.key === "Enter" && onEnter) onEnter();
+          }} />
+      ))}
+    </div>
+  );
+}
+
 const loadData = async (key, def) => {
   try {
     const snap = await getDocs(collection(db, "ecig_data"));
@@ -56,6 +111,8 @@ const styles = `
   .pin-row { display:flex; gap:10px; justify-content:center; margin-bottom:20px; }
   .pin-dot { width:52px; height:52px; border-radius:12px; border:2px solid var(--border); font-size:22px; text-align:center; font-family:'Nunito',sans-serif; font-weight:700; color:var(--green); outline:none; background:var(--bg); }
   .pin-dot:focus { border-color:var(--green); background:var(--green-light); }
+  .pin-row.six { gap:6px; }
+  .pin-row.six .pin-dot { width:42px; height:48px; font-size:20px; }
   .btn-email { width:100%; padding:14px; border-radius:14px; border:none; background:var(--green); color:var(--white); font-family:'Nunito',sans-serif; font-size:15px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:10px; transition:all 0.2s; margin-bottom:12px; }
   .btn-email:hover { background:var(--green-dark); }
   .btn-email:disabled { opacity:0.5; cursor:not-allowed; }
@@ -286,8 +343,7 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
   );
 
   const handleSaveAdresse = async () => {
-    const updated = familles.map(f => f.id==maFamille.id ? {...f, adresse} : f);
-    await saveData("ecig_familles", updated);
+    const updated = await majListe("ecig_familles", l => l.map(f => f.id==maFamille.id ? {...f, adresse} : f));
     setFamilles(updated);
     setSavedAdresse(true);
     setEditAdresse(false);
@@ -298,13 +354,12 @@ function FamilleScreen({ membre, membres, familles, setFamilles, setMembres }) {
     if (!formMembre.prenom||!formMembre.nom) { alert("Prénom et nom requis"); return; }
     let updatedMembres;
     if (editMembreId) {
-      updatedMembres = membres.map(m => m.id==editMembreId ? {...m,...formMembre, familleId:maFamille.id, famille:maFamille.nom} : m);
+      updatedMembres = await majMembre(editMembreId, {...formMembre, familleId:maFamille.id, famille:maFamille.nom});
     } else {
       const newM = {...formMembre, id:Date.now(), familleId:maFamille.id, famille:maFamille.nom, dateAdhesion:new Date().toISOString().split("T")[0]};
-      updatedMembres = [...membres, newM];
+      updatedMembres = await majListe("ecig_membres", l => [...l, newM]);
     }
-    await saveData("ecig_membres", updatedMembres);
-    setMembres(updatedMembres);
+    setMembres(sansCodes(updatedMembres));
     setShowAddMembre(false);
     setEditMembreId(null);
     setSavedMembre(true);
@@ -640,29 +695,38 @@ function AnnoncesScreen({ annonces }) {
 function ProfilScreen({ membre, membres, setMembres }) {
   const [form, setForm] = useState({...membre});
   const [saved, setSaved] = useState(false);
-  const [pinForm, setPinForm] = useState({old:"",nouveau:"",confirm:""});
+  const [ancien, setAncien] = useState(PIN_VIDE());
+  const [nouveau, setNouveau] = useState(PIN_VIDE());
+  const [confirm, setConfirm] = useState(PIN_VIDE());
   const [pinMsg, setPinMsg] = useState("");
-  const initials = membre.prenom[0]+membre.nom[0];
+  const [enCours, setEnCours] = useState(false);
+  const initials = (membre.prenom?.[0] || "") + (membre.nom?.[0] || "");
 
   const handleSave = async () => {
-    const updated = membres.map(m => m.id===membre.id ? {...m,...form} : m);
-    await saveData("ecig_membres", updated);
-    setMembres(updated);
+    const { telephone, adresse } = form;
+    const updated = await majMembre(membre.id, { telephone: telephone || "", adresse: adresse || "" });
+    setMembres(sansCodes(updated));
     setSaved(true);
     setTimeout(()=>setSaved(false),3000);
   };
 
   const handlePinChange = async () => {
-    const currentPin = membre.pin||"1234";
-    if (pinForm.old!==currentPin) { setPinMsg("❌ Ancien PIN incorrect"); return; }
-    if (pinForm.nouveau.length!==4) { setPinMsg("❌ Le PIN doit avoir 4 chiffres"); return; }
-    if (pinForm.nouveau!==pinForm.confirm) { setPinMsg("❌ Les PINs ne correspondent pas"); return; }
-    const updated = membres.map(m => m.id===membre.id ? {...m,pin:pinForm.nouveau} : m);
-    await saveData("ecig_membres", updated);
-    setMembres(updated);
-    setPinMsg("✅ PIN modifié avec succès !");
-    setPinForm({old:"",nouveau:"",confirm:""});
-    setTimeout(()=>setPinMsg(""),3000);
+    const a = ancien.join(""), n = nouveau.join(""), c = confirm.join("");
+    if (n.length !== PIN_LONGUEUR) { setPinMsg(`❌ Le nouveau PIN doit avoir ${PIN_LONGUEUR} chiffres`); return; }
+    if (/^(\d)\1+$/.test(n) || n === "123456") { setPinMsg("❌ PIN trop simple, choisissez-en un autre"); return; }
+    if (n !== c) { setPinMsg("❌ Les PINs ne correspondent pas"); return; }
+    setEnCours(true); setPinMsg("");
+    try {
+      const u = auth.currentUser;
+      await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, a));
+      await updatePassword(u, n);
+      setPinMsg("✅ PIN modifié avec succès !");
+      setAncien(PIN_VIDE()); setNouveau(PIN_VIDE()); setConfirm(PIN_VIDE());
+    } catch (e) {
+      setPinMsg(e?.code?.includes("credential") || e?.code?.includes("wrong-password") ? "❌ Ancien PIN incorrect" : "❌ " + (e?.code || e?.message));
+    }
+    setEnCours(false);
+    setTimeout(()=>setPinMsg(""),4000);
   };
 
   return (
@@ -673,17 +737,23 @@ function ProfilScreen({ membre, membres, setMembres }) {
       <div className="card">
         <div className="section-title">✏️ Modifier mon profil</div>
         <div className="form-group"><div className="form-label">Téléphone</div><input className="form-input" value={form.telephone||""} onChange={e=>setForm({...form,telephone:e.target.value})} placeholder="+243..." /></div>
-        <div className="form-group"><div className="form-label">Email</div><input className="form-input" value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})} placeholder="email@..." /></div>
+        <div className="form-group"><div className="form-label">Email de connexion</div>
+          <input className="form-input" value={membre.email||""} disabled style={{background:'#F3F4F6',color:'#6B7280'}} />
+          <div style={{fontSize:'11px',color:'var(--text-muted)',marginTop:'4px'}}>Pour changer l'email de connexion, adressez-vous au secrétariat.</div>
+        </div>
         <div className="form-group"><div className="form-label">Adresse</div><input className="form-input" value={form.adresse||""} onChange={e=>setForm({...form,adresse:e.target.value})} placeholder="Adresse..." /></div>
         <button className="btn-save" onClick={handleSave}>💾 Enregistrer</button>
         {saved && <div className="success-msg">✅ Profil mis à jour !</div>}
       </div>
       <div className="pin-section">
         <div className="pin-section-title">🔐 Changer mon PIN</div>
-        <div className="form-group"><div className="form-label">Ancien PIN</div><input className="form-input" type="password" maxLength={4} value={pinForm.old} onChange={e=>setPinForm({...pinForm,old:e.target.value})} placeholder="••••" /></div>
-        <div className="form-group"><div className="form-label">Nouveau PIN (4 chiffres)</div><input className="form-input" type="password" maxLength={4} value={pinForm.nouveau} onChange={e=>setPinForm({...pinForm,nouveau:e.target.value})} placeholder="••••" /></div>
-        <div className="form-group"><div className="form-label">Confirmer</div><input className="form-input" type="password" maxLength={4} value={pinForm.confirm} onChange={e=>setPinForm({...pinForm,confirm:e.target.value})} placeholder="••••" /></div>
-        <button className="btn-save" style={{background:'var(--gold)'}} onClick={handlePinChange}>🔐 Changer le PIN</button>
+        <div className="pin-label">PIN actuel</div>
+        <PinInput value={ancien} onChange={setAncien} prefix="pa" />
+        <div className="pin-label">Nouveau PIN ({PIN_LONGUEUR} chiffres)</div>
+        <PinInput value={nouveau} onChange={setNouveau} prefix="pn" />
+        <div className="pin-label">Confirmer</div>
+        <PinInput value={confirm} onChange={setConfirm} prefix="pc" />
+        <button className="btn-save" style={{background:'var(--gold)'}} onClick={handlePinChange} disabled={enCours}>{enCours ? "…" : "🔐 Changer le PIN"}</button>
         {pinMsg && <div className={pinMsg.startsWith("✅")?"success-msg":"error-msg"}>{pinMsg}</div>}
       </div>
     </div>
@@ -695,271 +765,230 @@ function ProfilScreen({ membre, membres, setMembres }) {
 // ============================================================
 export default function App() {
   const [screen, setScreen] = useState("login");
-  const [loginStep, setLoginStep] = useState("email"); // email | select | pin | change-pin
+  // email | pin | activer-nom | activer-ancien | activer-nouveau
+  const [loginStep, setLoginStep] = useState("email");
   const [userEmail, setUserEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [membre, setMembre] = useState(null);
   const [selectedId, setSelectedId] = useState("");
-  const [pin, setPin] = useState(["","","",""]);
-  const [newPin, setNewPin] = useState(["","","",""]);
-  const [newPin2, setNewPin2] = useState(["","","",""]);
+  const [pin, setPin] = useState(PIN_VIDE());
+  const [ancienPin, setAncienPin] = useState(["","","",""]);
+  const [newPin, setNewPin] = useState(PIN_VIDE());
+  const [newPin2, setNewPin2] = useState(PIN_VIDE());
   const [error, setError] = useState("");
   const [pinAttempts, setPinAttempts] = useState(0);
   const [blockedUntil, setBlockedUntil] = useState(null);
   const [membres, setMembres] = useState([]);
+  const [listeActivation, setListeActivation] = useState([]);  // chargée UNIQUEMENT pour l'activation
   const [familles, setFamilles] = useState([]);
-  const [loadingMembres, setLoadingMembres] = useState(true);
   const [cotisations, setCotisations] = useState([]);
   const [annonces, setAnnonces] = useState([]);
   const [calendrier, setCalendrier] = useState([]);
   const [enseignements, setEnseignements] = useState([]);
+  const [demarrage, setDemarrage] = useState(true);
 
-  // Ref pour éviter les "stale closures" dans les event listeners
   const screenRef = useRef("login");
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
-  useEffect(() => {
-    const init = async () => {
-      const fetchMembres = async () => {
-      const data = await loadData("ecig_membres", []);
-      setMembres(data);
-
-      // Restaurer la session sauvegardée
-      // sessionStorage est effacé quand l'app est tuée sur Android → preuve que la session est légitime
-      try {
-        const sessionAlive = sessionStorage.getItem("ecig_alive");
-        const saved = localStorage.getItem("ecig_session");
-        if (!sessionAlive && saved) {
-          // App relancée après avoir été tuée → effacer la session sauvegardée
-          localStorage.removeItem("ecig_session");
-        }
-        if (sessionAlive && saved) {
-          const { membreId, userEmail: savedEmail } = JSON.parse(saved);
-          const found = data.find(m => String(m.id) === String(membreId));
-          if (found) {
-            setLoading(true);
-            setLoadingMembres(false);
-            if (savedEmail) setUserEmail(savedEmail);
-            const [cotis, anno, cal, fams, ens] = await Promise.all([
-              loadData("ecig_cotisations", []),
-              loadData("ecig_annonces", []),
-              loadData("ecig_activites", []),
-              loadData("ecig_familles", []),
-              loadData("ecig_enseignements", []),
-            ]);
-            setCotisations(cotis);
-            setAnnonces(anno);
-            setCalendrier(cal);
-            setFamilles(fams);
-            setEnseignements(ens);
-            setMembre(found);
-            setLoading(false);
-            setScreen("home");
-            return;
-          }
-        }
-      } catch(e) {}
-
-      setLoadingMembres(false);
-    };
-    fetchMembres();
-    };
-    init();
-  }, []);
-
-  const handlePinChange = (index, value, setter) => {
-    if (!/^\d?$/.test(value)) return;
-    const arr = setter === setPin ? [...pin] : setter === setNewPin ? [...newPin] : [...newPin2];
-    arr[index] = value;
-    setter(arr);
-    if (value && index < 3) document.getElementById(`${setter === setPin ? "pin" : setter === setNewPin ? "np" : "np2"}-${index+1}`)?.focus();
+  const resetLogin = () => {
+    setMembre(null); setScreen("login"); setLoginStep("email"); setUserEmail("");
+    setPin(PIN_VIDE()); setAncienPin(["","","",""]); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
+    setError(""); setPinAttempts(0); setBlockedUntil(null); setSelectedId(""); setListeActivation([]);
   };
 
-  // Étape 1 — Saisie email → cherche si email déjà connu dans Firebase
-  const handleEmailSubmit = () => {
-    if (!userEmail || !userEmail.includes("@")) { setError("Veuillez entrer une adresse email valide."); return; }
-    setError("");
-    // Si l'email correspond déjà à un membre connu → aller direct au PIN
-    const found = membres.find(m => m.email && m.email.toLowerCase() === userEmail.toLowerCase());
-    if (found) {
-      setSelectedId(String(found.id));
-      setPin(["","","",""]);
-      setPinAttempts(0);
-      setBlockedUntil(null);
-      setLoginStep("pin");
-    } else {
-      // Première connexion → choisir son nom
-      setLoginStep("select");
-    }
-  };
-
-  // Étape 2 — Sélection du membre → Étape 3 PIN
-  const handleSelectMembre = () => {
-    if (!selectedId) { setError("Veuillez choisir votre nom."); return; }
-    setError(""); setPin(["","","",""]); setPinAttempts(0); setBlockedUntil(null);
-    setLoginStep("pin");
-  };
-
-  // Étape 3 — Vérification PIN
-  const handleLogin = async () => {
-    // Vérifier si bloqué
-    if (blockedUntil && new Date() < blockedUntil) {
-      const secs = Math.ceil((blockedUntil - new Date()) / 1000);
-      setError(`Compte bloqué. Réessayez dans ${secs} secondes.`); return;
-    }
-    const pinStr = pin.join("");
-    const found = membres.find(m => m.id == selectedId);
-    if (!found) { setError("Membre introuvable."); return; }
-    const pinCorrect = found.pin || "1234";
-    if (pinStr !== pinCorrect) {
-      const attempts = pinAttempts + 1;
-      setPinAttempts(attempts);
-      setPin(["","","",""]);
-      if (attempts >= 3) {
-        const until = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-        setBlockedUntil(until);
-        setError("⛔ 3 tentatives échouées. Compte bloqué 5 minutes.");
-      } else {
-        setError(`PIN incorrect. ${3 - attempts} tentative(s) restante(s).`);
-      }
-      return;
-    }
-    // PIN correct — vérifier si PIN par défaut
-    if (pinCorrect === "1234") {
-      setLoginStep("change-pin");
-      setError("");
-      return;
-    }
-    // Connexion complète
-    await completeLogin(found);
-  };
-
-  // Étape 4 (optionnelle) — Forcer changement PIN
-  const handleChangePin = async () => {
-    const np = newPin.join("");
-    const np2 = newPin2.join("");
-    if (np.length < 4) { setError("Le nouveau PIN doit contenir 4 chiffres."); return; }
-    if (np === "1234") { setError("Le PIN 1234 n'est pas autorisé."); return; }
-    if (np !== np2) { setError("Les deux PIN ne correspondent pas."); return; }
-    const found = membres.find(m => m.id == selectedId);
-    // Sauvegarder email + nouveau PIN dans Firebase → valide sur tous les appareils
-    const updated = membres.map(m => m.id == selectedId ? {...m, pin: np, email: userEmail} : m);
-    setMembres(updated);
-    await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
-    await completeLogin({...found, pin: np, email: userEmail});
-  };
-
-  const completeLogin = async (found) => {
+  /** Charge les données de l'espace membre une fois authentifié */
+  const ouvrirEspace = async (membreId) => {
     setLoading(true);
-    // Toujours sauvegarder l'email dans Firebase pour retrouver le membre sur tout appareil
-    if (userEmail) {
-      const updated = membres.map(m => m.id === found.id ? {...m, ...found, email: userEmail} : m);
-      setMembres(updated);
-      await setDoc(doc(db, "ecig_data", "ecig_membres"), { value: JSON.stringify(updated) });
-      found = {...found, email: userEmail};
-    }
-    const [cotis, anno, cal, fams, ens] = await Promise.all([
+    const [mbrs, cotis, anno, cal, fams, ens] = await Promise.all([
+      loadData("ecig_membres", []),
       loadData("ecig_cotisations", []),
       loadData("ecig_annonces", []),
       loadData("ecig_activites", []),
       loadData("ecig_familles", []),
       loadData("ecig_enseignements", []),
     ]);
-    setCotisations(cotis); setAnnonces(anno); setCalendrier(cal); setFamilles(fams); setEnseignements(ens);
-    setMembre(found);
-    try {
-      localStorage.setItem("ecig_session", JSON.stringify({ membreId: found.id, userEmail }));
-      sessionStorage.setItem("ecig_alive", "1"); // Preuve que l'app est active
-    } catch(e) {}
+    const found = mbrs.find(m => String(m.id) === String(membreId));
+    if (!found) { setLoading(false); await signOut(auth).catch(()=>{}); resetLogin(); setError("Fiche membre introuvable. Contactez le secrétariat."); return false; }
+    setMembres(sansCodes(mbrs));
+    setCotisations(cotis.filter(c => String(c.membreId) === String(membreId)));   // jamais celles des autres en mémoire
+    setAnnonces(anno); setCalendrier(cal); setFamilles(fams); setEnseignements(ens);
+    const { pin: _p, ...sansPin } = found;
+    setMembre(sansPin);
+    try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
     setLoading(false);
     setScreen("home");
+    return true;
+  };
+
+  const membreIdDuCompte = async (uid) => {
+    const snap = await getDoc(doc(db, "profils_membres", uid));
+    return snap.exists() ? snap.data().membreId : null;
+  };
+
+  // Restauration d'une session Firebase encore valide (même onglet)
+  useEffect(() => {
+    let premier = true;
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      if (!premier) return;
+      premier = false;
+      try {
+        const alive = sessionStorage.getItem("ecig_alive");
+        if (u && alive && u.email?.endsWith("@membres.ecig.local")) {
+          const mid = await membreIdDuCompte(u.uid);
+          if (mid && await ouvrirEspace(mid)) { setDemarrage(false); return; }
+        }
+        if (u && !alive) await signOut(auth).catch(()=>{});
+      } catch(e) {}
+      setDemarrage(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // ── Étape 1 : email ─────────────────────────────────────────────────────
+  const handleEmailSubmit = () => {
+    if (!userEmail || !userEmail.includes("@")) { setError("Veuillez entrer une adresse email valide."); return; }
+    setError(""); setPin(PIN_VIDE()); setLoginStep("pin");
+  };
+
+  // ── Étape 2 : PIN à 6 chiffres, vérifié par le serveur ───────────────────
+  const handleLogin = async () => {
+    if (blockedUntil && new Date() < blockedUntil) {
+      setError(`Compte bloqué. Réessayez dans ${Math.ceil((blockedUntil - new Date())/1000)} secondes.`); return;
+    }
+    const code = pin.join("");
+    if (code.length !== PIN_LONGUEUR) return;
+    setLoading(true); setError("");
+    try {
+      try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
+      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(userEmail), code);
+      const mid = await membreIdDuCompte(cred.user.uid);
+      if (!mid) { await signOut(auth); setLoading(false); setError("Compte sans fiche membre. Contactez le secrétariat."); return; }
+      await ouvrirEspace(mid);
+    } catch (e) {
+      setLoading(false);
+      setPin(PIN_VIDE());
+      const c = e?.code || "";
+      if (c.includes("too-many-requests")) { setError("Trop de tentatives. Patientez quelques minutes."); return; }
+      const attempts = pinAttempts + 1;
+      setPinAttempts(attempts);
+      if (attempts >= 3) {
+        setBlockedUntil(new Date(Date.now() + 5*60*1000));
+        setError("⛔ 3 tentatives échouées. Compte bloqué 5 minutes.");
+      } else {
+        setError(`PIN incorrect, ou compte pas encore activé. ${3 - attempts} tentative(s) restante(s).`);
+      }
+    }
+  };
+
+  // ── Activation (première connexion avec le nouveau système) ──────────────
+  // La liste des membres n'est chargée qu'ici, le temps de l'activation.
+  const debuterActivation = async () => {
+    if (!userEmail || !userEmail.includes("@")) { setError("Entrez d'abord votre email."); setLoginStep("email"); return; }
+    setError(""); setLoading(true);
+    const data = await loadData("ecig_membres", []);
+    setListeActivation(data);
+    setLoading(false);
+    const parEmail = data.find(m => m.email && m.email.toLowerCase() === userEmail.toLowerCase());
+    if (parEmail) { setSelectedId(String(parEmail.id)); setLoginStep("activer-ancien"); }
+    else { setSelectedId(""); setLoginStep("activer-nom"); }
+    setAncienPin(["","","",""]);
+  };
+
+  const verifierAncienPin = () => {
+    if (blockedUntil && new Date() < blockedUntil) { setError("Compte bloqué temporairement. Réessayez plus tard."); return; }
+    const m = listeActivation.find(x => String(x.id) === String(selectedId));
+    if (!m) { setError("Membre introuvable."); return; }
+    if (m.authActive && !m.pin) { setError("Ce compte est déjà activé. Connectez-vous avec votre PIN à 6 chiffres, ou demandez une réinitialisation au secrétariat."); return; }
+    const attendu = m.pin || "1234";
+    if (ancienPin.join("") !== attendu) {
+      const attempts = pinAttempts + 1; setPinAttempts(attempts); setAncienPin(["","","",""]);
+      if (attempts >= 3) { setBlockedUntil(new Date(Date.now() + 5*60*1000)); setError("⛔ 3 tentatives échouées. Bloqué 5 minutes."); }
+      else setError(`Ancien PIN incorrect. ${3 - attempts} tentative(s) restante(s).`);
+      return;
+    }
+    setError(""); setPinAttempts(0); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
+    setLoginStep("activer-nouveau");
+  };
+
+  const terminerActivation = async () => {
+    const n = newPin.join(""), n2 = newPin2.join("");
+    if (n.length !== PIN_LONGUEUR) { setError(`Le nouveau PIN doit contenir ${PIN_LONGUEUR} chiffres.`); return; }
+    if (/^(\d)\1+$/.test(n) || n === "123456") { setError("PIN trop simple, choisissez-en un autre."); return; }
+    if (n !== n2) { setError("Les deux PIN ne correspondent pas."); return; }
+    setLoading(true); setError("");
+    try {
+      try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
+      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(userEmail), n);
+      await setDoc(doc(db, "profils_membres", cred.user.uid), {
+        uid: cred.user.uid, membreId: String(selectedId), email: userEmail.trim().toLowerCase(), activeLe: Date.now(),
+      });
+      // Le code n'est plus stocké dans la liste des membres
+      await majMembre(selectedId, { pin: null, authActive: true, email: userEmail.trim().toLowerCase() });
+      setListeActivation([]);
+      await ouvrirEspace(selectedId);
+    } catch (e) {
+      setLoading(false);
+      const c = e?.code || "";
+      setError(c.includes("email-already-in-use")
+        ? "Un compte est déjà activé avec cet email. Connectez-vous avec votre PIN à 6 chiffres, ou demandez une réinitialisation au secrétariat."
+        : "Activation impossible : " + (c || e?.message));
+    }
   };
 
   const handleLogout = async () => {
     try { await signOut(auth); localStorage.removeItem("ecig_session"); sessionStorage.removeItem("ecig_alive"); } catch(e) {}
-    setMembre(null); setScreen("login"); setLoginStep("email"); setUserEmail("");
-    setPin(["","","",""]); setNewPin(["","","",""]); setNewPin2(["","","",""]); setError(""); setPinAttempts(0); setBlockedUntil(null);
+    resetLogin();
   };
 
-  // 🔒 SÉCURITÉ 1 — Verrouillage au retour au premier plan (visibilitychange)
-  // useRef évite le problème de "stale closure" sur Android PWA
+  // 🔒 SÉCURITÉ 1 — Verrouillage au retour au premier plan
   useEffect(() => {
     const doLock = () => {
-      try {
-        localStorage.removeItem("ecig_session");
-        sessionStorage.removeItem("ecig_alive"); // Invalider la session
-      } catch(e) {}
-      setMembre(null);
-      setScreen("login");
-      setLoginStep("email");
-      setUserEmail("");
-      setPin(["","","",""]);
-      setNewPin(["","","",""]);
-      setNewPin2(["","","",""]);
-      setError("");
-      setPinAttempts(0);
-      setBlockedUntil(null);
+      try { localStorage.removeItem("ecig_session"); sessionStorage.removeItem("ecig_alive"); } catch(e) {}
+      signOut(auth).catch(() => {});
+      resetLogin();
     };
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        // App passe en arrière-plan → effacer IMMÉDIATEMENT session + flag
-        if (screenRef.current !== "login") {
-          try {
-            localStorage.removeItem("ecig_session");
-            sessionStorage.removeItem("ecig_alive");
-          } catch(e) {}
-        }
+        if (screenRef.current !== "login") { try { sessionStorage.removeItem("ecig_alive"); } catch(e) {} }
       } else if (document.visibilityState === "visible") {
-        // App revient au premier plan → si on était connecté, verrouiller
-        if (screenRef.current !== "login") {
-          doLock();
-        }
+        if (screenRef.current !== "login") doLock();
       }
     };
-    // pageshow couvre le cas "retour depuis le cache" sur certains navigateurs Android
-    const handlePageShow = (e) => {
-      if (screenRef.current !== "login") { doLock(); }
-    };
+    const handlePageShow = () => { if (screenRef.current !== "login") doLock(); };
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pageshow", handlePageShow);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pageshow", handlePageShow);
     };
-  }, []); // [] = une seule fois, le ref lit toujours la valeur actuelle
+  }, []);
 
-  // 🔒 SÉCURITÉ 2 — Déconnexion automatique après 10 minutes d'inactivité
+  // 🔒 SÉCURITÉ 2 — Déconnexion automatique après 3 minutes d'inactivité
   useEffect(() => {
-    if (screen === "login") return; // Pas de timer sur l'écran de login
-    const TIMEOUT = 3 * 60 * 1000; // 3 minutes
+    if (screen === "login") return;
+    const TIMEOUT = 3 * 60 * 1000;
     let timer;
     const resetTimer = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        try { localStorage.removeItem("ecig_session"); } catch(e) {}
-        setMembre(null);
-        setScreen("login");
-        setLoginStep("email");
-        setUserEmail("");
-        setPin(["","","",""]);
-        setNewPin(["","","",""]);
-        setNewPin2(["","","",""]);
-        setError("");
-        setPinAttempts(0);
-        setBlockedUntil(null);
+        try { sessionStorage.removeItem("ecig_alive"); } catch(e) {}
+        signOut(auth).catch(() => {});
+        resetLogin();
       }, TIMEOUT);
     };
-    // Événements d'activité utilisateur
     const events = ["touchstart", "touchmove", "click", "keydown", "scroll"];
     events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }));
-    resetTimer(); // Démarrer le timer
-    return () => {
-      clearTimeout(timer);
-      events.forEach(e => window.removeEventListener(e, resetTimer));
-    };
+    resetTimer();
+    return () => { clearTimeout(timer); events.forEach(e => window.removeEventListener(e, resetTimer)); };
   }, [screen]);
 
-  // Écran de login — 3 étapes
+  const lien = { width:'100%', marginTop:10, padding:'10px', border:'none', background:'transparent', color:'var(--text-muted)', cursor:'pointer', fontSize:13 };
+  const etapes = ["email","pin","activer-nouveau"];
+  const etapeActive = loginStep === "email" ? 0 : loginStep === "pin" ? 1 : loginStep === "activer-nouveau" ? 2 : 1;
+
+  if (demarrage) return <div className="app"><style>{styles}</style><Spinner/></div>;
+
+  // ── Écran de connexion ───────────────────────────────────────────────────
   if (screen === "login") return (
     <div className="app">
       <style>{styles}</style>
@@ -970,108 +999,75 @@ export default function App() {
         <div className="login-title">MEMBRES - ECIG</div>
         <div className="login-sub">Église du Christ en Intercession LA GRACE</div>
         <div className="login-card">
-          {/* Indicateur d'étapes */}
           <div className="step-indicator">
-            {["email","select","pin"].map((s,i) => (
-              <div key={s} className={`step-dot ${loginStep === s || (loginStep === "change-pin" && i === 2) ? "active" : ""}`} />
-            ))}
+            {etapes.map((s,i) => <div key={s} className={`step-dot ${etapeActive === i ? "active" : ""}`} />)}
           </div>
 
-          {/* ÉTAPE 1 — Email */}
           {loginStep === "email" && <>
             <h3>✉️ Votre adresse email</h3>
-            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:20}}>
-              Entrez votre email pour accéder à votre espace membre.
-            </p>
+            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:20}}>Entrez votre email pour accéder à votre espace membre.</p>
             <div className="form-group">
-              <input
-                className="form-input"
-                type="email"
-                value={userEmail}
-                onChange={e=>{setUserEmail(e.target.value);setError("");}}
-                placeholder="votre@email.com"
-                onKeyDown={e=>e.key==="Enter"&&handleEmailSubmit()}
-                style={{marginBottom:'12px'}}
-              />
+              <input className="form-input" type="email" value={userEmail} autoComplete="off"
+                onChange={e=>{setUserEmail(e.target.value);setError("");}} placeholder="votre@email.com"
+                onKeyDown={e=>e.key==="Enter"&&handleEmailSubmit()} style={{marginBottom:'12px'}} />
             </div>
-            <button className="btn-login" onClick={handleEmailSubmit} disabled={!userEmail}>
-              Continuer →
-            </button>
+            <button className="btn-login" onClick={handleEmailSubmit} disabled={!userEmail}>Continuer →</button>
             {error && <div className="error-msg">{error}</div>}
           </>}
 
-          {/* ÉTAPE 2 — Choisir son nom */}
-          {loginStep === "select" && <>
-            <h3>👤 Qui êtes-vous ?</h3>
-            {userEmail && <div className="email-display">✉️ {userEmail}</div>}
-            {loadingMembres ? <div style={{textAlign:'center',padding:'20px',color:'var(--text-muted)'}}>Chargement...</div> : <>
-              <select className="login-select" value={selectedId} onChange={e=>{setSelectedId(e.target.value);setError("");}}>
-                <option value="">— Choisissez votre nom —</option>
-                {membres.map(m=><option key={m.id} value={m.id}>{m.prenom} {m.nom}{m.fonction?` (${m.fonction})`:""}</option>)}
-              </select>
-              <button className="btn-login" onClick={handleSelectMembre} disabled={!selectedId}>
-                Continuer →
-              </button>
-              {error && <div className="error-msg">{error}</div>}
-            </>}
-          </>}
-
-          {/* ÉTAPE 3 — PIN */}
           {loginStep === "pin" && <>
             <h3>🔑 Entrez votre PIN</h3>
-            {userEmail && <div className="email-display">✉️ {userEmail}</div>}
+            <div className="email-display">✉️ {userEmail}</div>
             {blockedUntil && new Date() < blockedUntil
-              ? <div className="blocked-msg">⛔ Compte bloqué temporairement.<br/>Trop de tentatives échouées.<br/>Réessayez dans 5 minutes.</div>
+              ? <div className="blocked-msg">⛔ Compte bloqué temporairement.<br/>Réessayez dans 5 minutes.</div>
               : <>
-                <div className="pin-label">🔐 PIN à 4 chiffres</div>
-                <div className="pin-row">
-                  {[0,1,2,3].map(i=>(
-                    <input key={i} id={`pin-${i}`} className="pin-dot" type="password" inputMode="numeric" maxLength={1}
-                      value={pin[i]} onChange={e=>handlePinChange(i,e.target.value,setPin)}
-                      onKeyDown={e=>{if(e.key==="Backspace"&&!pin[i]&&i>0)document.getElementById(`pin-${i-1}`)?.focus();}}
-                    />
-                  ))}
-                </div>
-                {pinAttempts > 0 && <div className="pin-attempts">⚠️ {3 - pinAttempts} tentative(s) restante(s)</div>}
-                <div className="pin-hint">💡 PIN par défaut : 1234</div>
-                <button className="btn-login" onClick={handleLogin} disabled={loading||pin.join("").length<4}>
-                  {loading?"Connexion...":"Se connecter →"}
+                <div className="pin-label">🔐 PIN à {PIN_LONGUEUR} chiffres</div>
+                <PinInput value={pin} onChange={setPin} prefix="pin" onEnter={handleLogin} />
+                <button className="btn-login" onClick={handleLogin} disabled={loading||pin.join("").length<PIN_LONGUEUR}>
+                  {loading ? "Connexion..." : "Se connecter →"}
                 </button>
-              </>
-            }
-            <button onClick={()=>{setLoginStep("select");setPin(["","","",""]);setError("");setPinAttempts(0);setBlockedUntil(null);}} style={{width:'100%',marginTop:10,padding:'10px',border:'none',background:'transparent',color:'var(--text-muted)',cursor:'pointer',fontSize:13}}>
-              ← Changer de nom
-            </button>
-            <button onClick={()=>{setLoginStep("email");setPin(["","","",""]);setError("");setPinAttempts(0);setBlockedUntil(null);setSelectedId("");}} style={{width:'100%',padding:'6px',border:'none',background:'transparent',color:'var(--text-muted)',cursor:'pointer',fontSize:12}}>
-              ← Changer d'email
-            </button>
+              </>}
+            <div className="pin-change-banner" style={{marginTop:14}}>
+              Première connexion depuis la mise à jour, ou vous aviez un PIN à 4 chiffres ?
+              <button onClick={debuterActivation} disabled={loading} style={{display:'block',margin:'8px auto 0',padding:'8px 14px',border:'none',borderRadius:'8px',background:'var(--green)',color:'#fff',fontWeight:700,cursor:'pointer'}}>
+                Activer mon compte
+              </button>
+            </div>
+            <button onClick={()=>{resetLogin();}} style={lien}>← Changer d'email</button>
             {error && <div className="error-msg">{error}</div>}
           </>}
 
-          {/* ÉTAPE 4 — Changer PIN par défaut (forcé) */}
-          {loginStep === "change-pin" && <>
-            <div className="pin-change-banner">⚠️ Pour votre sécurité, vous devez choisir un nouveau PIN personnalisé avant de continuer.</div>
-            <h3>🔒 Nouveau PIN</h3>
-            <div className="pin-label">Nouveau PIN (4 chiffres)</div>
-            <div className="pin-row">
-              {[0,1,2,3].map(i=>(
-                <input key={i} id={`np-${i}`} className="pin-dot" type="password" inputMode="numeric" maxLength={1}
-                  value={newPin[i]} onChange={e=>handlePinChange(i,e.target.value,setNewPin)}
-                  onKeyDown={e=>{if(e.key==="Backspace"&&!newPin[i]&&i>0)document.getElementById(`np-${i-1}`)?.focus();}}
-                />
-              ))}
-            </div>
-            <div className="pin-label">Confirmer le nouveau PIN</div>
-            <div className="pin-row">
-              {[0,1,2,3].map(i=>(
-                <input key={i} id={`np2-${i}`} className="pin-dot" type="password" inputMode="numeric" maxLength={1}
-                  value={newPin2[i]} onChange={e=>handlePinChange(i,e.target.value,setNewPin2)}
-                  onKeyDown={e=>{if(e.key==="Backspace"&&!newPin2[i]&&i>0)document.getElementById(`np2-${i-1}`)?.focus();}}
-                />
-              ))}
-            </div>
-            <button className="btn-login" onClick={handleChangePin} disabled={loading||newPin.join("").length<4||newPin2.join("").length<4}>
-              {loading?"Enregistrement...":"✅ Enregistrer et accéder"}
+          {loginStep === "activer-nom" && <>
+            <h3>👤 Qui êtes-vous ?</h3>
+            <div className="email-display">✉️ {userEmail}</div>
+            <select className="login-select" value={selectedId} onChange={e=>{setSelectedId(e.target.value);setError("");}}>
+              <option value="">— Choisissez votre nom —</option>
+              {listeActivation.filter(m => !m.authActive).map(m=><option key={m.id} value={m.id}>{m.prenom} {m.nom}{m.fonction?` (${m.fonction})`:""}</option>)}
+            </select>
+            <button className="btn-login" onClick={()=>{ if(!selectedId){setError("Choisissez votre nom.");return;} setError(""); setLoginStep("activer-ancien"); }} disabled={!selectedId}>Continuer →</button>
+            <button onClick={()=>{resetLogin();}} style={lien}>← Changer d'email</button>
+            {error && <div className="error-msg">{error}</div>}
+          </>}
+
+          {loginStep === "activer-ancien" && <>
+            <h3>🔓 Votre ancien PIN</h3>
+            <div className="email-display">✉️ {userEmail}</div>
+            <div className="pin-label">PIN actuel à 4 chiffres</div>
+            <PinInput value={ancienPin} onChange={setAncienPin} prefix="old" longueur={4} onEnter={verifierAncienPin} />
+            <div className="pin-hint">💡 Si vous ne l'aviez jamais changé : 1234</div>
+            <button className="btn-login" style={{marginTop:12}} onClick={verifierAncienPin} disabled={ancienPin.join("").length<4}>Continuer →</button>
+            <button onClick={()=>{resetLogin();}} style={lien}>← Annuler</button>
+            {error && <div className="error-msg">{error}</div>}
+          </>}
+
+          {loginStep === "activer-nouveau" && <>
+            <div className="pin-change-banner">🔒 Choisissez votre nouveau PIN à {PIN_LONGUEUR} chiffres. Il remplace l'ancien, sur tous vos appareils.</div>
+            <div className="pin-label">Nouveau PIN</div>
+            <PinInput value={newPin} onChange={setNewPin} prefix="np" />
+            <div className="pin-label">Confirmer</div>
+            <PinInput value={newPin2} onChange={setNewPin2} prefix="np2" onEnter={terminerActivation} />
+            <button className="btn-login" onClick={terminerActivation} disabled={loading||newPin.join("").length<PIN_LONGUEUR||newPin2.join("").length<PIN_LONGUEUR}>
+              {loading ? "Activation..." : "✅ Activer et accéder"}
             </button>
             {error && <div className="error-msg">{error}</div>}
           </>}
@@ -1080,9 +1076,9 @@ export default function App() {
     </div>
   );
 
-  if (loading) return <div className="app"><style>{styles}</style><Spinner/></div>;
+  if (loading || !membre) return <div className="app"><style>{styles}</style><Spinner/></div>;
 
-  const membreFrais = membres.find(m => m.id === membre.id) || membre;
+  const membreFrais = membres.find(m => String(m.id) === String(membre.id)) || membre;
 
   return (
     <div className="app">
