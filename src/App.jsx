@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction } from "firebase/firestore";
+import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction, query, where } from "firebase/firestore";
 import {
   getAuth, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
@@ -799,9 +799,22 @@ export default function App() {
   /** Charge les données de l'espace membre une fois authentifié */
   const ouvrirEspace = async (membreId) => {
     setLoading(true);
+    // Contributions : collection protégée — le serveur ne renvoie que celles du membre.
+    // Pendant la transition, on complète avec l'ancienne liste (sans doublon).
+    const lireContributions = async () => {
+      let protegees = [];
+      try {
+        const snap = await getDocs(query(collection(db, "contributions"), where("membreId", "==", String(membreId))));
+        protegees = snap.docs.map(d => ({ id: d.id, ...d.data(), montant: Number(d.data().montant) || 0 }));
+      } catch (e) { console.warn("Contributions :", e?.code); }
+      const transferees = new Set(protegees.map(c => c.idOrigine).filter(Boolean));
+      const anciennes = (await loadData("ecig_cotisations", []))
+        .filter(c => String(c.membreId) === String(membreId) && !transferees.has(String(c.id)));
+      return [...protegees, ...anciennes];
+    };
     const [mbrs, cotis, anno, cal, fams, ens] = await Promise.all([
       loadData("ecig_membres", []),
-      loadData("ecig_cotisations", []),
+      lireContributions(),
       loadData("ecig_annonces", []),
       loadData("ecig_activites", []),
       loadData("ecig_familles", []),
@@ -810,7 +823,7 @@ export default function App() {
     const found = mbrs.find(m => String(m.id) === String(membreId));
     if (!found) { setLoading(false); await signOut(auth).catch(()=>{}); resetLogin(); setError("Fiche membre introuvable. Contactez le secrétariat."); return false; }
     setMembres(sansCodes(mbrs));
-    setCotisations(cotis.filter(c => String(c.membreId) === String(membreId)));   // jamais celles des autres en mémoire
+    setCotisations(cotis);   // uniquement celles du membre connecté
     setAnnonces(anno); setCalendrier(cal); setFamilles(fams); setEnseignements(ens);
     const { pin: _p, ...sansPin } = found;
     setMembre(sansPin);
@@ -1011,7 +1024,12 @@ export default function App() {
                 onChange={e=>{setUserEmail(e.target.value);setError("");}} placeholder="votre@email.com"
                 onKeyDown={e=>e.key==="Enter"&&handleEmailSubmit()} style={{marginBottom:'12px'}} />
             </div>
-            <button className="btn-login" onClick={handleEmailSubmit} disabled={!userEmail}>Continuer →</button>
+            <button className="btn-login" onClick={handleEmailSubmit} disabled={!userEmail}>🔑 J'ai mon PIN à 6 chiffres</button>
+            <button className="btn-login" onClick={debuterActivation} disabled={!userEmail || loading}
+              style={{marginTop:10, background:'#fff', color:'var(--green)', border:'2px solid var(--green)'}}>
+              {loading ? "…" : "✨ Première connexion — activer mon compte"}
+            </button>
+            <div className="pin-hint" style={{marginTop:10}}>Première connexion = vous n'avez encore jamais choisi de PIN à 6 chiffres.</div>
             {error && <div className="error-msg">{error}</div>}
           </>}
 
@@ -1028,7 +1046,7 @@ export default function App() {
                 </button>
               </>}
             <div className="pin-change-banner" style={{marginTop:14}}>
-              Première connexion depuis la mise à jour, ou vous aviez un PIN à 4 chiffres ?
+              Vous n'avez pas encore de PIN à 6 chiffres ? Ne tapez rien ci-dessus :
               <button onClick={debuterActivation} disabled={loading} style={{display:'block',margin:'8px auto 0',padding:'8px 14px',border:'none',borderRadius:'8px',background:'var(--green)',color:'#fff',fontWeight:700,cursor:'pointer'}}>
                 Activer mon compte
               </button>
@@ -1050,7 +1068,8 @@ export default function App() {
           </>}
 
           {loginStep === "activer-ancien" && <>
-            <h3>🔓 Votre ancien PIN</h3>
+            <h3>🔓 Activation — étape 1 sur 2</h3>
+            <p style={{fontSize:13,color:'var(--text-muted)',textAlign:'center',marginBottom:14}}>Tapez d'abord votre <strong>ancien</strong> PIN. Vous choisirez le nouveau, à 6 chiffres, juste après.</p>
             <div className="email-display">✉️ {userEmail}</div>
             <div className="pin-label">PIN actuel à 4 chiffres</div>
             <PinInput value={ancienPin} onChange={setAncienPin} prefix="old" longueur={4} onEnter={verifierAncienPin} />
@@ -1061,7 +1080,8 @@ export default function App() {
           </>}
 
           {loginStep === "activer-nouveau" && <>
-            <div className="pin-change-banner">🔒 Choisissez votre nouveau PIN à {PIN_LONGUEUR} chiffres. Il remplace l'ancien, sur tous vos appareils.</div>
+            <h3>🔒 Activation — étape 2 sur 2</h3>
+            <div className="pin-change-banner">Choisissez votre nouveau PIN à {PIN_LONGUEUR} chiffres. Il remplace l'ancien, sur tous vos appareils.</div>
             <div className="pin-label">Nouveau PIN</div>
             <PinInput value={newPin} onChange={setNewPin} prefix="np" />
             <div className="pin-label">Confirmer</div>
