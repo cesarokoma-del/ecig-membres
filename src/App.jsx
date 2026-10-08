@@ -343,7 +343,9 @@ function HomeScreen({ membre, cotisations }) {
           <div><div className="form-label">Famille</div><div style={{fontSize:'14px',fontWeight:'600'}}>{membre.famille||"—"}</div></div>
           <div><div className="form-label">Succursale</div><div style={{fontSize:'14px',fontWeight:'600'}}>{SUCCURSALES[membre.succursale]||"—"}</div></div>
           <div><div className="form-label">N° de membre</div>
-            <div style={{fontSize:'16px',fontWeight:'800',fontFamily:'monospace',color:'var(--green)',letterSpacing:'1px'}}>{membre.matricule||"En attente d'attribution"}</div></div>
+            {membre.matricule
+              ? <div style={{fontSize:'16px',fontWeight:'800',fontFamily:'monospace',color:'var(--green)',letterSpacing:'1px'}}>{membre.matricule}</div>
+              : <div style={{fontSize:'13px',color:'var(--text-muted)',fontStyle:'italic'}}>En attente</div>}</div>
         </div>
       </div>
     </div>
