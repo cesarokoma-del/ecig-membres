@@ -65,14 +65,17 @@ const normaliserIdentifiant = (brut) => {
   if (d.length < 10 || d.length > 15) return null;
   return { type: "tel", affichage: "+" + d, slug: "t" + d };
 };
-// Version de l'identifiant technique (augmente à chaque code d'activation émis)
+// Version de l'identifiant technique (augmente à chaque code d'activation émis).
+// 0 = aucun code jamais émis pour cet identifiant.
 const versionAcces = async (slug) => {
   try {
     const sn = await getDoc(doc(db, "versions_acces", slug));
-    return sn.exists() ? (Number(sn.data().v) || 1) : 1;
-  } catch (e) { return 1; }
+    return sn.exists() ? (Number(sn.data().v) || 0) : 0;
+  } catch (e) { return 0; }
 };
-const emailAuthMembre = (slug, v = 1) => `${slug}${v > 1 ? ".v" + v : ""}@membres.ecig.local`;
+// Dès qu'un code a été émis, l'identifiant technique porte toujours sa version :
+// il ne peut jamais coïncider avec un compte plus ancien.
+const emailAuthMembre = (slug, v = 0) => `${slug}${v > 0 ? ".v" + v : ""}@membres.ecig.local`;
 setPersistence(auth, browserSessionPersistence).catch(() => {});
 const PIN_LONGUEUR = 6;
 const PIN_VIDE = () => Array(PIN_LONGUEUR).fill("");
@@ -957,9 +960,20 @@ export default function App() {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
       const v = await versionAcces(ident.slug);
       const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), n);
-      await setDoc(doc(db, "profils_membres", cred.user.uid), {
-        uid: cred.user.uid, membreId: String(codeValide.membreId), identifiant: ident.slug, code: codeValide.id, activeLe: Date.now(),
-      });
+      try {
+        await setDoc(doc(db, "profils_membres", cred.user.uid), {
+          uid: cred.user.uid, membreId: String(codeValide.membreId), identifiant: ident.slug, code: codeValide.id, activeLe: Date.now(),
+        });
+      } catch (eLien) {
+        // Le lien avec la fiche a échoué : on supprime le compte à peine créé,
+        // pour que le même code puisse être réutilisé immédiatement.
+        console.error("Lien profil :", eLien);
+        await cred.user.delete().catch(() => {});
+        await signOut(auth).catch(() => {});
+        setLoading(false);
+        setError("Activation interrompue (" + (eLien?.code || eLien?.message) + "). Réessayez avec le même code ; si l'erreur persiste, transmettez ce message au secrétariat.");
+        return;
+      }
       await deleteDoc(doc(db, "codes_activation", codeValide.id)).catch(() => {});
       await updateDoc(doc(db, "membres", String(codeValide.membreId)), { authActive: true }).catch(() => {});
       await ouvrirEspace(codeValide.membreId);
