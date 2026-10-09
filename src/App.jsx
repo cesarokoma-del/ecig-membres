@@ -313,7 +313,7 @@ function BottomNav({ screen, setScreen }) {
 // ============================================================
 // ÉCRAN: ACCUEIL
 // ============================================================
-function HomeScreen({ membre, cotisations }) {
+function HomeScreen({ membre, cotisations, theme }) {
   const now = new Date();
   const greeting = now.getHours() < 12 ? "Bonjour" : now.getHours() < 18 ? "Bon après-midi" : "Bonsoir";
   const myCotis = cotisations.filter(c => c.membreId == membre.id);
@@ -325,8 +325,8 @@ function HomeScreen({ membre, cotisations }) {
       <div className="hero">
         <div className="hero-greeting">{greeting} 🙏</div>
         <div className="hero-name">{membre.prenom} {membre.nom}</div>
-        <div className="hero-theme">✝ L'ÉLARGISSEMENT (REHOBOTH)</div>
-        <div className="hero-verse">"Car l'Éternel notre Dieu nous a élargi le lieu..." — Gen 26:22</div>
+        {theme?.titre && <div className="hero-theme">✝ Thème {theme.annee} : {theme.titre}</div>}
+        {theme?.verset && <div className="hero-verse">« {theme.verset} »{theme.reference ? ` — ${theme.reference}` : ""}</div>}
       </div>
       <div className="section-title">💰 Mes cotisations totales</div>
       <div className="stats-row">
@@ -834,6 +834,7 @@ export default function App() {
   const [calendrier, setCalendrier] = useState([]);
   const [enseignements, setEnseignements] = useState([]);
   const [demarrage, setDemarrage] = useState(true);
+  const [theme, setTheme] = useState(null);
 
   const screenRef = useRef("login");
   useEffect(() => { screenRef.current = screen; }, [screen]);
@@ -877,6 +878,7 @@ export default function App() {
         getDocs(query(collection(db, "enseignements"), where("membreId", "==", String(membreId)))).catch(() => ({ docs: [] })),
       ]);
       const ens = sens.docs.map(d => ({ ...d.data(), id: d.id }));
+      try { const st = await getDoc(doc(db, "parametres_publics", "theme")); setTheme(st.exists() ? st.data() : null); } catch (e) {}
       setMembres(proches); setFamilles(fam); setCotisations(contribs);
       setAnnonces(anno); setCalendrier(cal); setEnseignements(ens);
       setMembre(moi);
@@ -1142,7 +1144,7 @@ export default function App() {
     <div className="app">
       <style>{styles}</style>
       <TopBar membre={membreFrais} onLogout={handleLogout} />
-      {screen==="home"          && <HomeScreen membre={membreFrais} cotisations={cotisations}/>}
+      {screen==="home"          && <HomeScreen membre={membreFrais} cotisations={cotisations} theme={theme}/>}
       {screen==="famille"       && <FamilleScreen membre={membreFrais} membres={membres} familles={familles} setFamilles={setFamilles} setMembres={setMembres}/>}
       {screen==="calendrier"    && <CalendrierScreen calendrier={calendrier}/>}
       {screen==="annonces"      && <AnnoncesScreen annonces={annonces}/>}
