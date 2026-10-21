@@ -1006,33 +1006,10 @@ export default function App() {
     resetLogin();
   };
 
-  // 🔒 Verrouillage au retour au premier plan
-  useEffect(() => {
-    const doLock = () => {
-      try { localStorage.removeItem("ecig_session"); sessionStorage.removeItem("ecig_alive"); } catch(e) {}
-      signOut(auth).catch(() => {});
-      resetLogin();
-    };
-    const handleVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        if (screenRef.current !== "login") { try { sessionStorage.removeItem("ecig_alive"); } catch(e) {} }
-      } else if (document.visibilityState === "visible") {
-        if (screenRef.current !== "login") doLock();
-      }
-    };
-    const handlePageShow = () => { if (screenRef.current !== "login") doLock(); };
-    document.addEventListener("visibilitychange", handleVisibility);
-    window.addEventListener("pageshow", handlePageShow);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("pageshow", handlePageShow);
-    };
-  }, []);
-
-  // 🔒 Déconnexion après 3 minutes d'inactivité
+  // 🔒 Déconnexion après 5 minutes d'inactivité (pas de verrou au changement d'onglet)
   useEffect(() => {
     if (screen === "login") return;
-    const TIMEOUT = 3 * 60 * 1000;
+    const TIMEOUT = 5 * 60 * 1000;
     let timer;
     const resetTimer = () => {
       clearTimeout(timer);
