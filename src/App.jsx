@@ -63,7 +63,10 @@ const normaliserIdentifiant = (brut) => {
   if (d.length === 10 && d.startsWith("0")) d = "243" + d.slice(1);
   if (d.length === 9) d = "243" + d;
   if (d.length < 10 || d.length > 15) return null;
-  return { type: "tel", affichage: "+" + d, slug: "t" + d };
+  // Affichage : les numéros du Congo comme on les dit sur place (08…, 09…) ;
+  // l'identifiant technique (slug) garde l'indicatif, pour rester unique.
+  const local = d.length === 12 && d.startsWith("243");
+  return { type: "tel", affichage: local ? "0" + d.slice(3) : "+" + d, slug: "t" + d };
 };
 // Version de l'identifiant technique (augmente à chaque code d'activation émis).
 // 0 = aucun code jamais émis pour cet identifiant.
