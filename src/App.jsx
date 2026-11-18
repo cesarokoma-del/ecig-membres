@@ -77,10 +77,19 @@ const versionAcces = async (slug) => {
 // il ne peut jamais coïncider avec un compte plus ancien.
 const emailAuthMembre = (slug, v = 0) => `${slug}${v > 0 ? ".v" + v : ""}@membres.ecig.local`;
 setPersistence(auth, browserSessionPersistence).catch(() => {});
-const PIN_LONGUEUR = 6;
+// PIN personnel : 4 chiffres. Firebase exige un mot de passe d'au moins
+// 6 caractères : le PIN à 4 chiffres est donc complété en coulisse par un
+// préfixe fixe. Les anciens PIN à 6 chiffres restent valables tels quels.
+const PIN_LONGUEUR = 4;
+const ANCIEN_PIN_LONGUEUR = 6;
+const CODE_LONGUEUR = 6;            // code d'activation remis par le secrétariat
+const motDePasseDuPin = (p) => p.length === PIN_LONGUEUR ? "EC" + p : p;
+const pinTropSimple = (p) => /^(\d)\1+$/.test(p) || "01234567890".includes(p) || "09876543210".includes(p)
+  || /^(\d\d)\1$/.test(p);        // 0000, 1234, 4321, 1212…
 // Succursales : liste à garder identique à celle d'ECIG-Gestion
 const SUCCURSALES = { "01": "Siège — Kinshasa (Ngaliema)", "02": "Demba (Sankuru)" };
-const PIN_VIDE = () => Array(PIN_LONGUEUR).fill("");
+const PIN_VIDE = (n = PIN_LONGUEUR) => Array(n).fill("");
+const CODE_VIDE = () => Array(CODE_LONGUEUR).fill("");
 
 /** Champ PIN à cases */
 function PinInput({ value, onChange, prefix, longueur = PIN_LONGUEUR, onEnter }) {
@@ -737,6 +746,7 @@ function ProfilScreen({ membre, membres, setMembres }) {
   const [form, setForm] = useState({...membre});
   const [saved, setSaved] = useState(false);
   const [ancien, setAncien] = useState(PIN_VIDE());
+  const [ancienLong, setAncienLong] = useState(false);   // PIN actuel à 6 chiffres (ancien format)
   const [nouveau, setNouveau] = useState(PIN_VIDE());
   const [confirm, setConfirm] = useState(PIN_VIDE());
   const [pinMsg, setPinMsg] = useState("");
@@ -754,16 +764,17 @@ function ProfilScreen({ membre, membres, setMembres }) {
 
   const handlePinChange = async () => {
     const a = ancien.join(""), n = nouveau.join(""), c = confirm.join("");
+    if (a.length !== (ancienLong ? ANCIEN_PIN_LONGUEUR : PIN_LONGUEUR)) { setPinMsg("❌ Saisissez votre PIN actuel en entier"); return; }
     if (n.length !== PIN_LONGUEUR) { setPinMsg(`❌ Le nouveau PIN doit avoir ${PIN_LONGUEUR} chiffres`); return; }
-    if (/^(\d)\1+$/.test(n) || n === "123456") { setPinMsg("❌ PIN trop simple, choisissez-en un autre"); return; }
+    if (pinTropSimple(n)) { setPinMsg("❌ PIN trop simple (chiffres identiques ou qui se suivent) : choisissez-en un autre"); return; }
     if (n !== c) { setPinMsg("❌ Les PINs ne correspondent pas"); return; }
     setEnCours(true); setPinMsg("");
     try {
       const u = auth.currentUser;
-      await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, a));
-      await updatePassword(u, n);
+      await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, motDePasseDuPin(a)));
+      await updatePassword(u, motDePasseDuPin(n));
       setPinMsg("✅ PIN modifié avec succès !");
-      setAncien(PIN_VIDE()); setNouveau(PIN_VIDE()); setConfirm(PIN_VIDE());
+      setAncien(PIN_VIDE()); setAncienLong(false); setNouveau(PIN_VIDE()); setConfirm(PIN_VIDE());
     } catch (e) {
       setPinMsg(e?.code?.includes("credential") || e?.code?.includes("wrong-password") ? "❌ Ancien PIN incorrect" : "❌ " + (e?.code || e?.message));
     }
@@ -796,7 +807,10 @@ function ProfilScreen({ membre, membres, setMembres }) {
       <div className="pin-section">
         <div className="pin-section-title">🔐 Changer mon PIN</div>
         <div className="pin-label">PIN actuel</div>
-        <PinInput value={ancien} onChange={setAncien} prefix="pa" />
+        <PinInput value={ancien} onChange={setAncien} prefix="pa" longueur={ancienLong ? ANCIEN_PIN_LONGUEUR : PIN_LONGUEUR} />
+        <button onClick={() => { setAncienLong(!ancienLong); setAncien(PIN_VIDE(ancienLong ? PIN_LONGUEUR : ANCIEN_PIN_LONGUEUR)); }}
+          style={{ background:'none', border:'none', color:'var(--text-muted)', fontSize:12, textDecoration:'underline', cursor:'pointer', display:'block', margin:'-12px auto 14px', fontFamily:'inherit' }}>
+          {ancienLong ? "Mon PIN actuel a 4 chiffres" : "Mon PIN actuel a 6 chiffres (ancien PIN)"}</button>
         <div className="pin-label">Nouveau PIN ({PIN_LONGUEUR} chiffres)</div>
         <PinInput value={nouveau} onChange={setNouveau} prefix="pn" />
         <div className="pin-label">Confirmer</div>
@@ -820,7 +834,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [membre, setMembre] = useState(null);
   const [pin, setPin] = useState(PIN_VIDE());
-  const [code, setCode] = useState(PIN_VIDE());
+  const [pinLong, setPinLong] = useState(false);          // ancien PIN à 6 chiffres
+  const longueurPin = pinLong ? ANCIEN_PIN_LONGUEUR : PIN_LONGUEUR;
+  const [code, setCode] = useState(CODE_VIDE());
   const [codeValide, setCodeValide] = useState(null);  // { id, membreId }
   const [newPin, setNewPin] = useState(PIN_VIDE());
   const [newPin2, setNewPin2] = useState(PIN_VIDE());
@@ -841,7 +857,7 @@ export default function App() {
 
   const resetLogin = () => {
     setMembre(null); setScreen("login"); setLoginStep("ident"); setSaisieIdent(""); setIdent(null);
-    setPin(PIN_VIDE()); setCode(PIN_VIDE()); setCodeValide(null); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
+    setPin(PIN_VIDE()); setPinLong(false); setCode(CODE_VIDE()); setCodeValide(null); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
     setError(""); setTentatives(0); setBlockedUntil(null);
   };
   const bloque = () => blockedUntil && new Date() < blockedUntil;
@@ -924,24 +940,24 @@ export default function App() {
     const n = normaliserIdentifiant(saisieIdent);
     if (!n) { setError("Saisissez votre numéro de téléphone (ex. 0812345678) ou votre adresse email."); return; }
     setIdent(n); setError(""); setTentatives(0);
-    setPin(PIN_VIDE()); setCode(PIN_VIDE());
+    setPin(PIN_VIDE()); setPinLong(false); setCode(CODE_VIDE());
     setLoginStep(suite);
   };
 
   // ── Connexion avec le PIN ──
   const handleLogin = async () => {
     if (bloque()) { setError("Trop de tentatives. Réessayez dans quelques minutes."); return; }
-    const p = pin.join(""); if (p.length !== PIN_LONGUEUR) return;
+    const p = pin.join(""); if (p.length !== longueurPin) return;
     setLoading(true); setError("");
     try {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
       const v = await versionAcces(ident.slug);
-      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), p);
+      const cred = await signInWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), motDePasseDuPin(p));
       const mid = await membreIdDuCompte(cred.user.uid);
       if (!mid) { await signOut(auth); setLoading(false); setError("Ce compte n'est plus actif. Demandez un nouveau code au secrétariat."); return; }
       await ouvrirEspace(mid);
     } catch (e) {
-      setLoading(false); setPin(PIN_VIDE());
+      setLoading(false); setPin(PIN_VIDE(longueurPin));
       if ((e?.code || "").includes("too-many-requests")) { setError("Trop de tentatives. Patientez quelques minutes."); return; }
       echec("PIN incorrect, ou compte pas encore activé.");
     }
@@ -950,13 +966,13 @@ export default function App() {
   // ── Activation : vérification du code reçu ──
   const verifierCode = async () => {
     if (bloque()) { setError("Trop de tentatives. Réessayez dans quelques minutes."); return; }
-    const c = code.join(""); if (c.length !== 6) return;
+    const c = code.join(""); if (c.length !== CODE_LONGUEUR) return;
     setLoading(true); setError("");
     const id = `${ident.slug}_${c}`;
     try {
       const sn = await getDoc(doc(db, "codes_activation", id));
       setLoading(false);
-      if (!sn.exists()) { setCode(PIN_VIDE()); echec("Code incorrect pour cet identifiant."); return; }
+      if (!sn.exists()) { setCode(CODE_VIDE()); echec("Code incorrect pour cet identifiant."); return; }
       if (Number(sn.data().expireLe) < Date.now()) { setError("Ce code a expiré. Demandez-en un nouveau au secrétariat."); return; }
       setCodeValide({ id, membreId: sn.data().membreId });
       setTentatives(0); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
@@ -968,13 +984,13 @@ export default function App() {
   const terminerActivation = async () => {
     const n = newPin.join(""), n2 = newPin2.join("");
     if (n.length !== PIN_LONGUEUR) { setError(`Le PIN doit contenir ${PIN_LONGUEUR} chiffres.`); return; }
-    if (/^(\d)\1+$/.test(n) || n === "123456" || n === "654321") { setError("PIN trop simple, choisissez-en un autre."); return; }
+    if (pinTropSimple(n)) { setError("PIN trop simple (chiffres identiques ou qui se suivent) : choisissez-en un autre."); return; }
     if (n !== n2) { setError("Les deux PIN ne correspondent pas."); return; }
     setLoading(true); setError("");
     try {
       try { sessionStorage.setItem("ecig_alive", "1"); } catch(e) {}
       const v = await versionAcces(ident.slug);
-      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), n);
+      const cred = await createUserWithEmailAndPassword(auth, emailAuthMembre(ident.slug, v), motDePasseDuPin(n));
       try {
         await setDoc(doc(db, "profils_membres", cred.user.uid), {
           uid: cred.user.uid, membreId: String(codeValide.membreId), identifiant: ident.slug, code: codeValide.id, activeLe: Date.now(),
@@ -1069,11 +1085,13 @@ export default function App() {
             {bloque()
               ? <div className="blocked-msg">⛔ Trop de tentatives.<br/>Réessayez dans 5 minutes.</div>
               : <>
-                <div className="pin-label">🔐 PIN à {PIN_LONGUEUR} chiffres</div>
-                <PinInput value={pin} onChange={setPin} prefix="pin" onEnter={handleLogin} />
-                <button className="btn-login" onClick={handleLogin} disabled={loading||pin.join("").length<PIN_LONGUEUR}>
+                <div className="pin-label">🔐 PIN à {longueurPin} chiffres</div>
+                <PinInput value={pin} onChange={setPin} prefix="pin" longueur={longueurPin} onEnter={handleLogin} />
+                <button className="btn-login" onClick={handleLogin} disabled={loading||pin.join("").length<longueurPin}>
                   {loading ? "Connexion..." : "Se connecter →"}
                 </button>
+                <button onClick={() => { setPinLong(!pinLong); setPin(PIN_VIDE(pinLong ? PIN_LONGUEUR : ANCIEN_PIN_LONGUEUR)); setError(""); }} style={lien}>
+                  {pinLong ? "Mon PIN a 4 chiffres" : "J'ai un ancien PIN à 6 chiffres"}</button>
               </>}
             <div className="pin-hint" style={{marginTop:12}}>PIN oublié ? Demandez un nouveau code au secrétariat.</div>
             <button onClick={resetLogin} style={lien}>← Changer d'identifiant</button>
@@ -1087,8 +1105,8 @@ export default function App() {
             {bloque()
               ? <div className="blocked-msg">⛔ Trop de tentatives.<br/>Réessayez dans 5 minutes.</div>
               : <>
-                <PinInput value={code} onChange={setCode} prefix="code" onEnter={verifierCode} />
-                <button className="btn-login" onClick={verifierCode} disabled={loading||code.join("").length<6}>
+                <PinInput value={code} onChange={setCode} prefix="code" longueur={CODE_LONGUEUR} onEnter={verifierCode} />
+                <button className="btn-login" onClick={verifierCode} disabled={loading||code.join("").length<CODE_LONGUEUR}>
                   {loading ? "Vérification..." : "Continuer →"}
                 </button>
               </>}
