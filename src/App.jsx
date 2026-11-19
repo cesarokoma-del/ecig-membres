@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction, query, where, updateDoc, deleteDoc } from "firebase/firestore";
+import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction, query, where, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import {
   getAuth, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   onAuthStateChanged, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
@@ -301,8 +301,9 @@ function TopBar({ membre, onLogout }) {
   );
 }
 
-function BottomNav({ screen, setScreen }) {
+function BottomNav({ screen, setScreen, protocole }) {
   const tabs = [
+    ...(protocole ? [{ id:"pointage", icon:"✅", label:"Pointage" }] : []),
     { id:"home", icon:"🏠", label:"Accueil" },
     { id:"famille", icon:"👨‍👩‍👧‍👦", label:"Famille" },
     { id:"calendrier", icon:"📅", label:"Agenda" },
@@ -828,6 +829,173 @@ function ProfilScreen({ membre, membres, setMembres }) {
 // ============================================================
 // APP PRINCIPALE
 // ============================================================
+// ============================================================
+// ÉCRAN: POINTAGE DES PRÉSENCES (membres du protocole)
+// Réservé aux membres désignés dans ECIG-Gestion (page « Protocole »).
+// Le chef du protocole peut en plus clôturer le pointage d'une réunion.
+// ============================================================
+const sansAccentsP = (t) => (t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+function PointageScreen({ membre, calendrier, chef }) {
+  const [noms, setNoms] = useState([]);                 // annuaire : { id, nom }
+  const [feuilles, setFeuilles] = useState({});         // présences par activité
+  const [sel, setSel] = useState(null);
+  const [marquage, setMarquage] = useState({});
+  const [touches, setTouches] = useState(new Set());
+  const [visiteurs, setVisiteurs] = useState(0);
+  const [visMod, setVisMod] = useState(false);
+  const [recherche, setRecherche] = useState("");
+  const [vue, setVue] = useState("tous");
+  const [etat, setEtat] = useState("");
+  const touchesRef = useRef(touches); touchesRef.current = touches;
+  const visModRef = useRef(visMod); visModRef.current = visMod;
+
+  // Lecture en direct : noms des membres et feuilles de présence
+  useEffect(() => {
+    const a = onSnapshot(collection(db, "annuaire"),
+      sn => setNoms(sn.docs.map(d => ({ id: d.id, nom: d.data().nom || "" })).filter(m => m.nom).sort((x, y) => x.nom.localeCompare(y.nom))),
+      e => setEtat("❌ Liste des membres illisible : " + (e.code || e.message)));
+    const b = onSnapshot(collection(db, "presences"),
+      sn => { const f = {}; sn.docs.forEach(d => { f[d.id] = d.data(); }); setFeuilles(f); },
+      e => console.error(e));
+    return () => { a(); b(); };
+  }, []);
+
+  const feuille = sel ? feuilles[String(sel.id)] : null;
+  const cloture = !!(feuille && feuille.cloture);
+
+  // La feuille du serveur s'applique ici, sauf pour ce que l'on vient de toucher sans l'avoir enregistré
+  useEffect(() => {
+    if (!sel) return;
+    setMarquage(prev => {
+      const m = {};
+      noms.forEach(n => { m[n.id] = false; });
+      if (feuille) (feuille.details || []).forEach(d => { m[String(d.membreId)] = !!d.present; });
+      touchesRef.current.forEach(id => { m[id] = !!prev[id]; });
+      return m;
+    });
+    if (!visModRef.current) setVisiteurs((feuille && feuille.visiteurs) || 0);
+  }, [sel, feuille, noms]);
+
+  const ouvrir = (a) => {
+    if ((touches.size || visMod) && !window.confirm("Des présences ne sont pas enregistrées. Changer d'activité quand même ?")) return;
+    setTouches(new Set()); setVisMod(false); setRecherche(""); setVue("tous"); setEtat(""); setSel(a);
+  };
+  const toggle = (id) => {
+    if (cloture) return;
+    setMarquage(m => ({ ...m, [id]: !m[id] }));
+    setTouches(t => new Set(t).add(id)); setEtat("");
+  };
+  const enregistrer = async (cloturer = false) => {
+    const nb = noms.filter(n => marquage[n.id]).length;
+    if (cloturer && !window.confirm(`Clôturer le pointage de « ${sel.titre} » ?\n\n${nb} membre(s) présent(s) et ${Number(visiteurs) || 0} visiteur(s).\nAprès la clôture, plus personne au protocole ne pourra modifier cette feuille.`)) return;
+    setEtat("envoi");
+    try {
+      const moi = `${membre.prenom || ""} ${membre.nom || ""}`.trim();
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, "presences", String(sel.id));
+        const sn = await tx.get(ref);
+        if (sn.exists() && sn.data().cloture) throw new Error("ce pointage vient d'être clôturé");
+        const e = {};
+        if (sn.exists()) (sn.data().details || []).forEach(d => { e[String(d.membreId)] = !!d.present; });
+        noms.forEach(n => { if (!(n.id in e)) e[n.id] = false; });
+        touches.forEach(id => { e[id] = !!marquage[id]; });
+        const typeId = (k) => /^\d+$/.test(k) ? Number(k) : k;
+        tx.set(ref, { activiteId: sel.id, date: sel.date, details: Object.entries(e).map(([k, present]) => ({ membreId: typeId(k), present })),
+          visiteurs: visMod ? (Number(visiteurs) || 0) : ((sn.exists() && sn.data().visiteurs) || 0), majPar: moi, majLe: Date.now(),
+          cloture: !!cloturer, ...(cloturer ? { cloturePar: moi, clotureLe: Date.now() } : {}) });
+      });
+      setTouches(new Set()); setVisMod(false); setEtat(cloturer ? "cloture" : "ok");
+    } catch (e) { setEtat("❌ Enregistrement refusé : " + (e.code || e.message) + ". Vérifiez la connexion et réessayez."); }
+  };
+
+  const auj = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const activites = [...calendrier].filter(a => !a.annulee).sort((a, b) => b.date.localeCompare(a.date));
+  const duJour = activites.filter(a => a.date === auj);
+  const autres = activites.filter(a => a.date < auj).slice(0, 8);
+  const btn = (fond, texte = "#fff") => ({ border:"none", borderRadius:12, padding:"12px 16px", background:fond, color:texte, fontWeight:700, fontSize:14, cursor:"pointer", fontFamily:"inherit" });
+  const champ = { width:"100%", padding:"12px 14px", borderRadius:12, border:"1.5px solid var(--border)", fontSize:15, fontFamily:"inherit", boxSizing:"border-box", background:"#fff" };
+
+  const ligneAct = (a) => {
+    const f = feuilles[String(a.id)];
+    return (
+      <div key={a.id} className="list-item" onClick={() => ouvrir(a)} style={{ cursor:"pointer" }}>
+        <div className="list-bullet gold">{f && f.cloture ? "🔒" : f ? "✓" : "📋"}</div>
+        <div className="list-body">
+          <div className="list-title">{a.titre}</div>
+          <div className="list-date">{a.date === auj ? "Aujourd'hui" : new Date(a.date + "T12:00:00").toLocaleDateString("fr-FR", { weekday:"long", day:"numeric", month:"long" })}{a.heure ? ` • ${a.heure}` : ""}</div>
+          {f && <div className="list-desc">{(f.details || []).filter(d => d.present).length} membre(s) + {f.visiteurs || 0} visiteur(s){f.cloture ? " — clôturé" : " — en cours"}</div>}
+        </div>
+      </div>
+    );
+  };
+
+  if (!sel) return (
+    <div className="content">
+      <div className="page-title">✅ Pointage</div>
+      <div className="page-sub">Présences aux cultes et activités{chef ? " — vous êtes chef du protocole" : ""}</div>
+      <div className="section-title">📌 Aujourd'hui</div>
+      <div className="card">
+        {duJour.length === 0 ? <div className="empty"><div className="empty-icon">📅</div><p>Aucune activité au calendrier pour aujourd'hui. Demandez au secrétariat de l'y inscrire.</p></div> : duJour.map(ligneAct)}
+      </div>
+      {autres.length > 0 && <><div className="section-title">🕘 Activités récentes</div><div className="card">{autres.map(ligneAct)}</div></>}
+    </div>
+  );
+
+  const nbPresents = noms.filter(n => marquage[n.id]).length;
+  const aEnregistrer = touches.size > 0 || visMod;
+  const q = sansAccentsP(recherche.trim());
+  const liste = noms.filter(n => !q || sansAccentsP(n.nom).includes(q)).filter(n => vue === "tous" || (vue === "presents") === !!marquage[n.id]);
+  const pastille = { display:"inline-block", background:"var(--gold-light)", color:"var(--gold)", borderRadius:20, fontWeight:700, fontSize:13, padding:"6px 12px" };
+
+  return (
+    <div className="content">
+      <button onClick={() => ouvrir(null)} style={{ ...btn("transparent", "var(--green)"), padding:"4px 0", marginBottom:8 }}>← Autres activités</button>
+      <div className="page-title" style={{ fontSize:20 }}>{sel.titre}</div>
+      <div className="page-sub">{new Date(sel.date + "T12:00:00").toLocaleDateString("fr-FR", { weekday:"long", day:"numeric", month:"long" })}{sel.heure ? ` • ${sel.heure}` : ""}</div>
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+        <span style={pastille}>{nbPresents}/{noms.length} membres</span>
+        <span style={pastille}>Total : {nbPresents + (Number(visiteurs) || 0)}</span>
+      </div>
+      {cloture && <div className="card" style={{ background:"#E8EAF6", borderColor:"#C5CAE9", fontSize:13 }}>🔒 <strong>Pointage clôturé</strong>{feuille.cloturePar ? ` par ${feuille.cloturePar}` : ""}. Cette feuille ne peut plus être modifiée. En cas d'erreur, demandez au secrétariat de la rouvrir.</div>}
+
+      <div className="card" style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <span style={{ flex:"1 1 120px", fontWeight:700, fontSize:13 }}>Visiteurs (non membres)</span>
+        {cloture ? <strong style={{ fontSize:18 }}>{Number(visiteurs) || 0}</strong> : <>
+          <button onClick={() => { setVisiteurs(v => Math.max(0, (Number(v) || 0) - 1)); setVisMod(true); setEtat(""); }} style={{ ...btn("#fff", "#333"), border:"1.5px solid var(--border)", fontSize:18, padding:"8px 16px" }}>−</button>
+          <input type="number" min="0" inputMode="numeric" value={visiteurs} onChange={e => { setVisiteurs(Math.max(0, parseInt(e.target.value, 10) || 0)); setVisMod(true); setEtat(""); }} style={{ ...champ, width:76, textAlign:"center", fontWeight:700 }} />
+          <button onClick={() => { setVisiteurs(v => (Number(v) || 0) + 1); setVisMod(true); setEtat(""); }} style={{ ...btn("#fff", "#333"), border:"1.5px solid var(--border)", fontSize:18, padding:"8px 16px" }}>＋</button>
+        </>}
+      </div>
+
+      <input style={{ ...champ, marginBottom:8 }} placeholder="🔍 Rechercher un nom…" value={recherche} onChange={e => setRecherche(e.target.value)} />
+      <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+        {[["tous", "Tous"], ["presents", "Présents"], ["absents", "Absents"]].map(([k, l]) =>
+          <button key={k} onClick={() => setVue(k)} style={{ ...btn(vue === k ? "var(--green)" : "#fff", vue === k ? "#fff" : "#555"), border:"1.5px solid var(--border)", padding:"8px 12px", fontSize:12, flex:1 }}>{l}</button>)}
+      </div>
+
+      {etat === "ok" && <div className="card" style={{ background:"var(--green-light)", fontSize:13 }}>✅ Présences enregistrées.</div>}
+      {etat === "cloture" && <div className="card" style={{ background:"var(--green-light)", fontSize:13 }}>✅ Présences enregistrées et pointage clôturé.</div>}
+      {etat.startsWith("❌") && <div className="error-msg" style={{ marginBottom:10 }}>{etat}</div>}
+
+      <div className="card" style={{ padding:8 }}>
+        {liste.length === 0 && <div className="empty"><p>Aucun membre ne correspond.</p></div>}
+        {liste.map(n => { const present = !!marquage[n.id], attente = touches.has(n.id);
+          return <div key={n.id} onClick={() => toggle(n.id)} style={{ display:"flex", alignItems:"center", gap:12, padding:"13px 10px", borderRadius:10, marginBottom:4, cursor: cloture ? "default" : "pointer",
+            background: present ? "var(--green-light)" : "#fafafa", border:`1.5px ${attente ? "dashed" : "solid"} ${present ? "var(--green)" : attente ? "var(--gold)" : "#eee"}` }}>
+            <div style={{ flex:1, minWidth:0, fontWeight:600, fontSize:15, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{n.nom}</div>
+            <div style={{ width:28, height:28, borderRadius:14, background: present ? "var(--green)" : "#ddd", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, flexShrink:0 }}>{present ? "✓" : ""}</div>
+          </div>; })}
+      </div>
+
+      {!cloture && <div style={{ position:"sticky", bottom:74, display:"flex", gap:8, background:"var(--bg)", padding:"8px 0" }}>
+        <button disabled={!aEnregistrer || etat === "envoi"} onClick={() => enregistrer(false)} style={{ ...btn(aEnregistrer ? "var(--green)" : "#9bb5a5"), flex:1 }}>
+          {etat === "envoi" ? "Enregistrement…" : aEnregistrer ? `💾 Enregistrer (${touches.size + (visMod ? 1 : 0)})` : "✓ Tout est enregistré"}</button>
+        {chef && <button disabled={etat === "envoi"} onClick={() => enregistrer(true)} style={btn("#283593")}>🔒 Clôturer</button>}
+      </div>}
+    </div>
+  );
+}
+
 export default function App() {
   const [screen, setScreen] = useState("login");
   // ident | pin | code | nouveau
@@ -854,12 +1022,13 @@ export default function App() {
   const [enseignements, setEnseignements] = useState([]);
   const [demarrage, setDemarrage] = useState(true);
   const [theme, setTheme] = useState(null);
+  const [protocole, setProtocole] = useState(null);   // null, ou { chef } si le membre est au protocole
 
   const screenRef = useRef("login");
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
   const resetLogin = () => {
-    setMembre(null); setScreen("login"); setLoginStep("ident"); setSaisieIdent(""); setIdent(null);
+    setMembre(null); setProtocole(null); setScreen("login"); setLoginStep("ident"); setSaisieIdent(""); setIdent(null);
     setPin(PIN_VIDE()); setPinLong(false); setCode(CODE_VIDE()); setCodeValide(null); setNewPin(PIN_VIDE()); setNewPin2(PIN_VIDE());
     setError(""); setTentatives(0); setBlockedUntil(null);
   };
@@ -898,6 +1067,11 @@ export default function App() {
       ]);
       const ens = sens.docs.map(d => ({ ...d.data(), id: d.id }));
       try { const st = await getDoc(doc(db, "parametres_publics", "theme")); setTheme(st.exists() ? st.data() : null); } catch (e) {}
+      // Membre du protocole ? (désigné dans ECIG-Gestion, page « Protocole »)
+      try {
+        const sp = await getDoc(doc(db, "acces_protocole", "membre_" + String(membreId)));
+        setProtocole(sp.exists() && sp.data().actif === true ? { chef: sp.data().chef === true } : null);
+      } catch (e) { setProtocole(null); }
       setMembres(proches); setFamilles(fam); setCotisations(contribs);
       setAnnonces(anno); setCalendrier(cal); setEnseignements(ens);
       setMembre(moi);
@@ -1148,7 +1322,8 @@ export default function App() {
       {screen==="annonces"      && <AnnoncesScreen annonces={annonces}/>}
       {screen==="enseignements" && <EnseignementsScreen membre={membreFrais} enseignements={enseignements}/>}
       {screen==="profil"        && <ProfilScreen membre={membreFrais} membres={membres} setMembres={setMembres}/>}
-      <BottomNav screen={screen} setScreen={setScreen}/>
+      {screen==="pointage" && protocole && <PointageScreen membre={membreFrais} calendrier={calendrier} chef={protocole.chef}/>}
+      <BottomNav screen={screen} setScreen={setScreen} protocole={!!protocole}/>
     </div>
   );
 }
