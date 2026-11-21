@@ -427,7 +427,7 @@ function useMemoire(cle, defaut) {
     const f = () => { try { if (sessionStorage.getItem(k) === null) setV(defaut); } catch (e) {} };
     window.addEventListener(EVT, f);
     return () => window.removeEventListener(EVT, f);
-  }, [k]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [k]);
   const changer = useCallback((nv) => {
     setV(prev => {
       const val = typeof nv === "function" ? nv(prev) : nv;
