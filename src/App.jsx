@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, setDoc, getDoc, doc, runTransaction, query, where, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import {
@@ -301,6 +301,152 @@ function TopBar({ membre, onLogout }) {
   );
 }
 
+// ============================================================
+// NAVIGATION PAR L'ADRESSE (#/page?choix=…)
+//  - Actualiser : même écran, mêmes choix.
+//  - Bouton Retour du téléphone ou du navigateur : écran précédent.
+//  - Un lien ouvre un écran précis (après connexion).
+//  - Déconnexion : effacerNavigation() vide l'adresse et les choix gardés.
+// Le « # » ne demande aucun réglage chez Vercel et laisse intacts les liens
+// en « ?… » (vérification des certificats, QR codes).
+// ============================================================
+const EVT = "ecig-nav";
+const PREFIXE_MEMOIRE = "ecig_nav_";
+
+// ── Lecture / écriture de l'adresse ───────────────────────────────────────
+function lireAdresse() {
+  const h = (window.location.hash || "").replace(/^#\/?/, "");
+  const i = h.indexOf("?");
+  let page = i < 0 ? h : h.slice(0, i);
+  try { page = decodeURIComponent(page); } catch (e) {}
+  const params = Object.fromEntries(new URLSearchParams(i < 0 ? "" : h.slice(i + 1)));
+  return { page, params };
+}
+
+function construire(page, params) {
+  const q = new URLSearchParams(
+    Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== "")
+  ).toString();
+  return "#/" + (page || "") + (q ? "?" + q : "");
+}
+
+/**
+ * Va à un écran. Par défaut, ajoute une entrée à l'historique (le bouton
+ * Retour y reviendra). Si l'écran demandé est exactement l'écran précédent,
+ * on recule dans l'historique au lieu d'empiler : « Retour » dans l'appli et
+ * Retour du téléphone se comportent alors de la même façon.
+ */
+function naviguer(page, params = {}, { remplacer = false } = {}) {
+  const cible = construire(page, params);
+  const actuel = window.location.hash || "#/";
+  if (actuel === cible) return;
+  const etat = window.history.state;
+  if (!remplacer && etat && etat.ecig && etat.precedent === cible) {
+    window.history.back();
+    return;
+  }
+  const url = window.location.pathname + window.location.search + cible;
+  if (remplacer) {
+    window.history.replaceState({ ecig: true, precedent: etat && etat.precedent }, "", url);
+  } else {
+    window.history.pushState({ ecig: true, precedent: actuel }, "", url);
+  }
+  window.dispatchEvent(new Event(EVT));
+}
+
+/** Écran et paramètres actuels, mis à jour à chaque changement d'adresse. */
+function useAdresse() {
+  const [adr, setAdr] = useState(lireAdresse);
+  useEffect(() => {
+    const maj = () => setAdr(lireAdresse());
+    window.addEventListener("popstate", maj);
+    window.addEventListener("hashchange", maj);
+    window.addEventListener(EVT, maj);
+    return () => {
+      window.removeEventListener("popstate", maj);
+      window.removeEventListener("hashchange", maj);
+      window.removeEventListener(EVT, maj);
+    };
+  }, []);
+  return adr;
+}
+
+/**
+ * Un choix d'écran gardé dans l'adresse (onglet, filtre…).
+ * Remplace useState : const [onglet, setOnglet] = useParam("onglet", "solde");
+ */
+function useParam(cle, defaut = "", { remplacer = false } = {}) {
+  const { params } = useAdresse();
+  const valeur = params[cle] !== undefined ? params[cle] : defaut;
+  const changer = useCallback((v) => {
+    const cur = lireAdresse();
+    const prec = cur.params[cle] !== undefined ? cur.params[cle] : defaut;
+    const nv = typeof v === "function" ? v(prec) : v;
+    const p = { ...cur.params };
+    if (nv === undefined || nv === null || nv === "" || String(nv) === String(defaut)) delete p[cle];
+    else p[cle] = String(nv);
+    naviguer(cur.page, p, { remplacer });
+  }, [cle, defaut, remplacer]);
+  return [valeur, changer];
+}
+
+/** Même chose pour un nombre (mois, année, trimestre…). */
+function useParamNombre(cle, defaut, opts) {
+  const [v, set] = useParam(cle, String(defaut), opts);
+  const n = Number(v);
+  return [Number.isFinite(n) ? n : defaut, set];
+}
+
+/**
+ * Un élément ouvert en détail (opération, bon…), gardé par son identifiant.
+ * L'objet est retrouvé dans la liste ; s'il vient d'en sortir (exécuté…),
+ * on garde la dernière version connue pour ne pas fermer l'écran brusquement.
+ */
+function useSelection(cle, liste) {
+  const [id, setId] = useParam(cle, "");
+  const [dernier, setDernier] = useState(null);
+  const trouve = id ? (liste || []).find(x => x && String(x.id) === String(id)) : null;
+  const selection = id ? (trouve || (dernier && String(dernier.id) === String(id) ? dernier : null)) : null;
+  const choisir = useCallback((o) => {
+    setDernier(o || null);
+    setId(o ? o.id : "");
+  }, [setId]);
+  return [selection, choisir];
+}
+
+/**
+ * Un choix gardé pendant la session seulement (survit à l'actualisation,
+ * effacé à la déconnexion) : mois et année affichés, par exemple.
+ */
+function useMemoire(cle, defaut) {
+  const k = PREFIXE_MEMOIRE + cle;
+  const [v, setV] = useState(() => {
+    try { const s = sessionStorage.getItem(k); return s === null ? defaut : JSON.parse(s); } catch (e) { return defaut; }
+  });
+  useEffect(() => {
+    const f = () => { try { if (sessionStorage.getItem(k) === null) setV(defaut); } catch (e) {} };
+    window.addEventListener(EVT, f);
+    return () => window.removeEventListener(EVT, f);
+  }, [k]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const changer = useCallback((nv) => {
+    setV(prev => {
+      const val = typeof nv === "function" ? nv(prev) : nv;
+      try { sessionStorage.setItem(k, JSON.stringify(val)); } catch (e) {}
+      return val;
+    });
+  }, [k]);
+  return [v, changer];
+}
+
+/** Déconnexion : adresse vidée (« # » et « ? ») et choix mémorisés effacés. */
+function effacerNavigation() {
+  try {
+    Object.keys(sessionStorage).filter(c => c.startsWith(PREFIXE_MEMOIRE)).forEach(c => sessionStorage.removeItem(c));
+  } catch (e) {}
+  window.history.replaceState(null, "", window.location.pathname);
+  window.dispatchEvent(new Event(EVT));
+}
+
 function BottomNav({ screen, setScreen, protocole }) {
   const tabs = [
     ...(protocole ? [{ id:"pointage", icon:"✅", label:"Pointage" }] : []),
@@ -595,12 +741,12 @@ function getStatutStyle(statut) {
 }
 
 function EnseignementsScreen({ membre, enseignements }) {
-  const [selected, setSelected] = useState(null);
-
   // Filtrer uniquement les enseignements du membre connecté
   const mesEnseignements = enseignements.filter(e =>
     String(e.membreId) === String(membre.id)
   );
+  // Enseignement ouvert : dans l'adresse (#/enseignements?id=…) — le bouton Retour le ferme
+  const [selected, setSelected] = useSelection("id", mesEnseignements);
 
   if (selected) {
     const { iconClass, badgeClass, label } = getStatutStyle(selected.statut);
@@ -838,13 +984,16 @@ const sansAccentsP = (t) => (t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").t
 function PointageScreen({ membre, calendrier, chef }) {
   const [noms, setNoms] = useState([]);                 // annuaire : { id, nom }
   const [feuilles, setFeuilles] = useState({});         // présences par activité
-  const [sel, setSel] = useState(null);
+  // Activité ouverte : dans l'adresse (#/pointage?activite=…)
+  const [actId, setActId] = useParam("activite", "");
+  const sel = actId ? (calendrier.find(a => String(a.id) === String(actId)) || null) : null;
+  const setSel = (a) => setActId(a ? a.id : "");
   const [marquage, setMarquage] = useState({});
   const [touches, setTouches] = useState(new Set());
   const [visiteurs, setVisiteurs] = useState(0);
   const [visMod, setVisMod] = useState(false);
-  const [recherche, setRecherche] = useState("");
-  const [vue, setVue] = useState("tous");
+  const [recherche, setRecherche] = useParam("recherche", "", { remplacer: true });
+  const [vue, setVue] = useParam("vue", "tous", { remplacer: true });
   const [etat, setEtat] = useState("");
   const touchesRef = useRef(touches); touchesRef.current = touches;
   const visModRef = useRef(visMod); visModRef.current = visMod;
@@ -997,7 +1146,18 @@ function PointageScreen({ membre, calendrier, chef }) {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState("login");
+  // Écran affiché : « login » tant que personne n'est connecté, sinon l'écran
+  // indiqué par l'adresse (#/famille, #/pointage…) — actualisation, Retour et liens
+  const [enLigne, setEnLigne] = useState(false);
+  const { page: pageAdresse } = useAdresse();
+  const [protocole, setProtocole] = useState(null);   // null, ou { chef } si le membre est au protocole
+  const ECRANS = ["home", "famille", "calendrier", "annonces", "enseignements", "profil", ...(protocole ? ["pointage"] : [])];
+  const screen = !enLigne ? "login" : (ECRANS.includes(pageAdresse) ? pageAdresse : "home");
+  const setScreen = (s) => {
+    if (s === "login") setEnLigne(false);
+    else if (!enLigne) setEnLigne(true);      // connexion : on garde l'écran demandé par le lien
+    else naviguer(s);
+  };
   // ident | pin | code | nouveau
   const [loginStep, setLoginStep] = useState("ident");
   const [saisieIdent, setSaisieIdent] = useState("");
@@ -1022,7 +1182,6 @@ export default function App() {
   const [enseignements, setEnseignements] = useState([]);
   const [demarrage, setDemarrage] = useState(true);
   const [theme, setTheme] = useState(null);
-  const [protocole, setProtocole] = useState(null);   // null, ou { chef } si le membre est au protocole
 
   const screenRef = useRef("login");
   useEffect(() => { screenRef.current = screen; }, [screen]);
@@ -1197,6 +1356,7 @@ export default function App() {
   const handleLogout = async () => {
     try { await signOut(auth); localStorage.removeItem("ecig_session"); sessionStorage.removeItem("ecig_alive"); } catch(e) {}
     resetLogin();
+    effacerNavigation();   // adresse vidée : la personne suivante arrive sur l'accueil
   };
 
   // 🔒 Déconnexion après 5 minutes d'inactivité (pas de verrou au changement d'onglet)
@@ -1210,6 +1370,7 @@ export default function App() {
         try { sessionStorage.removeItem("ecig_alive"); } catch(e) {}
         signOut(auth).catch(() => {});
         resetLogin();
+        effacerNavigation();
       }, TIMEOUT);
     };
     const events = ["touchstart", "touchmove", "click", "keydown", "scroll"];
